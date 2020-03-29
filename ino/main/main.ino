@@ -50,9 +50,9 @@ unsigned long scheduled[30] = {0};  // holds timestamps for when scheduled notes
 uint8_t maxedout[3] = {0};          // flag for when each third of assigned array is totally full
 
 // Column structs
-int coldecays[30] = {0};    // keeps track of time at which each column segment will decay
-uint8_t colstatus[6] = {0}; // in COLUMN mode: 0 means released (totally off or decaying in FALL pattern), 1 means on under key press or press + sustain, 2 means on under sustain alone (1 and 2 are decaying in SUSTAIN pattern)
-enum coldecaystyles{SUSTAIN, FALL};  // column decay styles for COLUMNS mode
+unsigned long coldecays[30] = {0};    // keeps track of time at which each column segment will decay
+uint8_t colstatus[6] = {0};           // in COLUMN mode: 0 means released (totally off or decaying in FALL pattern), 1 means on under key press or press + sustain, 2 means on under sustain alone (1 and 2 are decaying in SUSTAIN pattern)
+enum coldecaystyles{SUSTAIN, FALL};   // column decay styles for COLUMNS mode
 
 
 // #################
@@ -105,6 +105,7 @@ void resetStarryMode() {
   memset(timestamps, 0, sizeof(timestamps));
   memset(scheduled, 0, sizeof(scheduled));
   memset(maxedout, 0, sizeof(maxedout));
+  allOff();
 }
 
 // returns first index (0-29) in assigned array where id matches. If note id not found, return -1
@@ -219,11 +220,12 @@ void processStarrySustainOff() {
 // note on should drive initial column activation and schedule a set of up to 5 decay timestamps
 // note off should reschedule the 5 decay timestamps to a rapid decay
 
-// zeroes out column data structures to leave all data structures in original condition
+// zeroes out column data structures to leave all data structures in original condition, and turns off all lights
 void resetColMode() {
   memset(status, 0, sizeof(status));
   memset(colstatus, 0, sizeof(colstatus));
   memset(coldecays, 0, sizeof(coldecays));
+  allOff();
 }
 
 // returns the index (0-5) of a column to use in column mode
@@ -279,6 +281,7 @@ void raiseCol(int col, int height) {
 // resets and overwrites column decays starting from a particular height, matching decay style (SUSTAIN or FALL)
 void setColDecays(int col, int height, enum coldecaystyles style) {
   unsigned long now = millis();
+  // Serial.print("setting decay times relative to time "); Serial.println(now);
   for (int i = 0; i < 5; i++) { // reset and overwrite column decays in one pass. i counts from bottom of column to top
     if (i < height) {
       if (style == SUSTAIN)
@@ -288,6 +291,7 @@ void setColDecays(int col, int height, enum coldecaystyles style) {
     } else {
       coldecays[col * 5 + 4 - i] = 0;
     }
+    // Serial.print("level "); Serial.print(i); Serial.print(" time "); Serial.println(coldecays[col * 5 + 4 - i]);
   }
 }
 
@@ -391,14 +395,14 @@ void respondToMidiMessage() {
 
 // reset used data structures and cycle through list
 void changemodeup() {
-  Serial.println("changing mode");
   if (mode == STARRY) {
     resetStarryMode();
     mode = COLUMNS;
-  }
-  if (mode == COLUMNS) {
+    Serial.println("changing mode to COLUMNS");
+  } else if (mode == COLUMNS) {
     resetColMode();
     mode = STARRY;
+    Serial.println("changing mode to STARRY");
   }
 }
 
@@ -471,7 +475,7 @@ void pollWhiteButton() {
     if (reading != whiteState) {
       whiteState = reading;
       if (whiteState == 1)
-        changemodeup();
+        changemodedown();
     }
   }
   lastWhiteState = reading;
@@ -541,14 +545,11 @@ void loop() {
 // could adjust by range: high (melody) notes get solo treatment, while bass notes are bundled to avoid clutter
 
 
-// sprint:
-// -- create ids array separate from on-off array to store active notes
-// -- make new notes pick an empty slot in ids array or displace an older one - also requires a timestamp array of note ages
-// -- sustains: if a note is sustained and plays again, turn it off and schedule it to turn on 100ms later. We will need to carefully keep track of scheduled notes and make sure not to displace them in that interval
-// make notes select a slot based on third
-
 // !! at some point I should probably ENUM the statuses
 // !! if compiled size starts to become a problem, one small tip is to use uint8_t or int8_t instead of int where possible
-// !! be carefule with mode switching, since I'm reusing data structures like status[30]. Remember to zero out appropriate flags and data structures when opening a new mode
 
-// !! test change
+// todo:
+// tune columns intensities (especially soft ones) to match actual intensity. Softest threshold is too soft
+// tune colunmns horizontal interval widths to match common playing intervals, kind of like thirds in starry mode
+// make columns re-flash repeated sustained columns like starry mode. Maybe also reflash decaying notes that are still on (I will get that for free I think)
+// lucinda says sustained columns should decay faster so you can actually see them, and also maybe fire up as well
