@@ -1,0 +1,92 @@
+LED notes
+
+
+each column will be a digit   (6 digits)
+each row will be a segment (5 segments)
+
+
++-----COL 0----+
+| row A  anode +-------SEG A  (horizontal wires)
+| row B  anode +-------SEG B
+| row C  anode +-------SEG C
+|     ...      |
+|common cathode|
++------+-------+
+       |
+       |
+    DIGIT 0
+(vertical wires)
+
+
+
+LED long leg is anode (+)
+ short leg is cathode (-) with flat indentation
+
+VOLTAGE CONTROL
+
+when turned off, digit sinks are pulled to +5V
+when turned off, segment sources are pulled to GND
+This places a 5V reverse bias across any off leds on off strands. Seems a little dicey, but it seems typical leds can handle -5V. Logically necessary if you assume bistate 5V-0 options.
+Aim for a supply voltage of just a little higher than your LED forward voltage.
+
+I need to make sure my LEDS can handle 5V forward (or else supply onl 3.3?) forward voltage seems to be more sensitive than reverse.
+
+
+CURRENT CONTROL
+
+The MAX7219/MAX7221 allow display brightness to be controlled with an external resistor (RSET) connected between V+ and ISET. The peak current sourced from the segment drivers is nominally 100 times the current entering ISET.  Its minimum value should be 9.53kΩ, which typically sets the segment current at 40mA. I think I want at least twice that to start. Intensity register also has a PWM.
+
+On power up:
+	Set all digits to no-decode mode (don't use code B font). Decode-mode control, logic low for D7-0:
+	XXXX 1001 0000 0000   (0x0900)
+
+	Set intensity:
+	Full: XXXX 1010 XXXX 1111   (0x0A0F)
+	Half: XXXX 1010 XXXX 0111   (0x0A07)
+
+	Set digits to scan. We want to scan 6 digits (cols) 0-5:
+    XXXX 1011 XXXX X101	  (0x0B05)
+
+    Display test mode enable, then back to normal:
+	test mode: XXXX 1111 XXXX XXX1   (0x0F01)
+    normal:    XXXX 1111 XXXX XXX0   (0x0F00)
+
+    Shutdown mode back to normal:
+    normal:    XXXX 1100 XXXX XXX1   (0x0C01)
+
+
+
+Driving:
+Select a digit with D11-8 (indexed from one, so digit 0 is 0xX1SS). Turn each segment on or off with D7-0 (DP, A, B, ... G)
+shiftOut with MSB first
+      example: turn on segments G and E for digit 1:    XXXX 0001 0000 0101
+
+
+General modes:
+Piano controlled
+idle animations
+We need to maintain a cycle rate so that the arduino will be responsive to inputs
+
+
+write a python script that takes a big array of 2D arrays representing the state of the board, and outputs a string mimicking an array of arrays of ints that constitute the 16-bit control signals to drive each animation
+
+Digit -->     0     1     2     3     4     5
+Segment
+   v
+                   1G          3G          5G
+(G)0         0G          2G          4G
+                   1F          3F          5F
+(F)1         0F          2F          4F
+                   1E          3E          5E
+(E)2         0E          2E          4E
+                   1D          3D          5D
+(D)3         0D          2D          4D
+                   1C          3C          5C
+(C)4         0C          2C          4C
+
+height:
+5 4: 1 1111
+4 3: 1 1110
+3 2: 1 1100
+2 1: 1 1000
+1 0: 1 0000
