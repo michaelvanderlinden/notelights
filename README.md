@@ -1,2 +1,2 @@
 # notelights
-led wall display
+Programmable LED wall array that responds to digital piano input
