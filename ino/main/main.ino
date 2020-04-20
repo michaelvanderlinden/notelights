@@ -19,10 +19,15 @@ const int DEBOUNCEDELAY = 30; // milliseconds to wait before registering a secon
 const unsigned int RESCHEDULEDELAY = 100; // time delay in milliseconds to darken repeated sustained notes
 const uint8_t MIDIBOUND1 = 53;   // notes below the F below middle C are in lower third (left two columns)
 const uint8_t MIDIBOUND2 = 72;   // notes above the C above middle C are in upper third (right two columns)
+const int OFFSIGNALS[6] = {256, 512, 768, 1024, 1280, 1536}; // MAX7219 messages to turn off each column
 const int DECAYPROFILESUSTAIN[5] = {2000, 3000, 3700, 5000, 8000}; // decay times for a sustained note
 const int DECAYPROFILEFALL[5] = {40, 80, 120, 160, 200}; // decay times for a falling note
-enum modes{STARRY, COLUMNS};   // global modes
-enum modes mode;               // global mode variable
+enum globalmodes{PIANO, AUTO};      // global switch modes
+enum globalmodes globalmode;        // global switch mode variable
+enum pianomodes{STARRY, COLUMNS};   // global pianomodes
+enum pianomodes pianomode;          // global pianomode variable
+enum automodes{RAINY, ALLON};       // global automodes
+enum automodes automode;            // global automode variable
 
 // global flags and structs
 // all flat 30-arrays are arranged top to bottom, left to right. G on top (LSB), C on bottom (MSB)
@@ -80,9 +85,8 @@ void sendData(int data) {
 
 // turns all leds off
 void allOff() {
-  int offsignals[6] = {256, 512, 768, 1024, 1280, 1536};
   for (int i = 0; i < 6; i++)
-    sendData(offsignals[i]);
+    sendData(OFFSIGNALS[i]);
 }
 
 // turns all leds on, then off using test mode
@@ -98,7 +102,7 @@ void testFlash(int ms) {
 // STARRY FUNCTIONS
 // ################
 
-// zeroes at starry mode data structures to return all data structures to original condition
+// when exiting starry mode, zeroes at starry mode data structures to return all data structures to original condition
 void resetStarryMode() {
   memset(status, 0, sizeof(status));
   memset(assigned, 0, sizeof(assigned));
@@ -220,7 +224,7 @@ void processStarrySustainOff() {
 // note on should drive initial column activation and schedule a set of up to 5 decay timestamps
 // note off should reschedule the 5 decay timestamps to a rapid decay
 
-// zeroes out column data structures to leave all data structures in original condition, and turns off all lights
+// when exiting column mode, zeroes out column data structures to leave all data structures in original condition, and turns off all lights
 void resetColMode() {
   memset(status, 0, sizeof(status));
   memset(colstatus, 0, sizeof(colstatus));
@@ -327,6 +331,31 @@ void processColSustainOff() {
   }
 }
 
+
+// #####################
+// ALL ON MODE FUNCTIONS
+// #####################
+
+void startAllOn() {
+  sendData(0x0F01); // enable test mode
+}
+
+void resetAllOnMode() {
+  sendData(0x0F00); // disable test mode
+}
+
+// ####################
+// RAINY MODE FUNCTIONS
+// ####################
+
+void startRainy() {
+  Serial.println("starting rainy mode placeholder");
+}
+
+void resetRainyMode() {
+  Serial.println("ending rainy mode placeholder");
+}
+
 // #######################
 // MIDI RESPONSE FUNCTIONS
 // #######################
@@ -347,17 +376,17 @@ void deluminate(int pos, bool reschedule) {
 }
 
 void processNoteOn(uint8_t noteid, uint8_t vel) {
-  if (mode == STARRY) {
+  if (pianomode == STARRY) {
     processStarryNoteOn(noteid);
-  } else if (mode == COLUMNS) {
+  } else if (pianomode == COLUMNS) {
     fireCol(findCol(noteid), vel);
   }
 }
 
 void processNoteOff(int noteid) {
-  if (mode == STARRY) {
+  if (pianomode == STARRY) {
     processStarryNoteOff(noteid);
-  } else if (mode == COLUMNS) {
+  } else if (pianomode == COLUMNS) {
     processColNoteOff(findCol(noteid));
   }
 }
@@ -368,9 +397,9 @@ void processSustainOn(void) {
 
 void processSustainOff(void) {
   sustain = 0;
-  if (mode == STARRY) {
+  if (pianomode == STARRY) {
     processStarrySustainOff();
-  } else if (mode == COLUMNS) {
+  } else if (pianomode == COLUMNS) {
     processColSustainOff();
   }
 }
@@ -395,20 +424,68 @@ void respondToMidiMessage() {
 
 // reset used data structures and cycle through list
 void changemodeup() {
-  if (mode == STARRY) {
-    resetStarryMode();
-    mode = COLUMNS;
-    Serial.println("changing mode to COLUMNS");
-  } else if (mode == COLUMNS) {
-    resetColMode();
-    mode = STARRY;
-    Serial.println("changing mode to STARRY");
+  if (globalmode == PIANO) {
+    if (pianomode == STARRY) {
+      resetStarryMode();
+      pianomode = COLUMNS;
+      Serial.println("changing pianomode to COLUMNS");
+    } else if (pianomode == COLUMNS) {
+      resetColMode();
+      pianomode = STARRY;
+      Serial.println("changing pianomode to STARRY");
+    }
+  } else if (globalmode == AUTO) {
+    if (automode == ALLON) {
+      resetAllOnMode();
+      automode = RAINY;
+      startRainy();
+      Serial.println("changing automode to RAINY");
+    } else if (automode == RAINY) {
+      resetRainyMode();
+      automode = ALLON;
+      startAllOn();
+      Serial.println("changing automode to ALLON");
+    }
   }
 }
 
 // cycle the other direction
 void changemodedown() {
   changemodeup();
+}
+
+// toggling switch from down to up (into auto mode)
+void switchUp() {
+  if (globalmode == PIANO) {
+    if (pianomode == STARRY) {
+      resetStarryMode();
+    } else if (pianomode == COLUMNS) {
+      resetColMode();
+    }
+    globalmode = AUTO;
+    if (automode == ALLON) {
+      startAllOn();
+    } else if (automode == RAINY) {
+      startRainy():
+    }
+  } else {
+    Serial.println("Switch going up but already in auto mode. Should not get here!!!"):
+  }
+}
+
+// toggling switch from up to down (into piano mode)
+void switchDown() {
+  if (globalmode == AUTO) {
+    if (automode == RAINY) {
+      resetRainyMode();
+    } else if (automode == ALLON) {
+      resetAllOnMode();
+    }
+    globalmode = PIANO;
+    // !! I don't think I need to init any piano-mode specific stuff, but if I did, this is where I would do it.
+  } else {
+    Serial.println("Switch going down but already in piano mode. Should not get here!!!"):
+  }
 }
 
 // Poll USB MIDI Controller and respond to keyboard inputs
@@ -423,7 +500,8 @@ void processMidi(void) {
 //        Serial.print(midibuf[i], HEX);
 //        Serial.print(" ");
 //      }
-      respondToMidiMessage();
+      if (globalmode == PIANO) // !! checking down here in case we need to keep polling midi buffer to flush it. But there could be side effects, like what if the piano must be turned on for auto to work? Not desirable. Also auto performance considerations of needlessly calling Usb.Task() and Midi.Recvdata(), although performance is fine for piano mode
+        respondToMidiMessage();
     }
   } while (bsize > 0);
 //  if (dataexists) {
@@ -434,14 +512,14 @@ void processMidi(void) {
 // take any led actions that are scheduled for some time in the future
 void processTimeDelays() {
   unsigned long now = millis(); 
-  if (mode == STARRY) {
+  if (pianomode == STARRY) {
     for (int i = 0; i < 30; i++) {
       if (status[i] == 3 && now >= scheduled[i]) {
         illuminate(i);
         timestamps[i] = now;
       }
     }
-  } else if (mode == COLUMNS) {
+  } else if (pianomode == COLUMNS) {
     for (int i = 0; i < 30; i++) {
       if (coldecays[i] != 0 && now >= coldecays[i]) {
         deluminate(i, false);
@@ -490,45 +568,59 @@ void pollSwitch() {
     if (reading != switchState) {
       switchState = reading;
       if (switchState == 1)
-        sendData(0x0F01); // enable test mode
+        switchUp();
       else
-        sendData(0x0F00); // disable test mode
+        switchDown();
     }
   }
   lastSwitchState = reading;
 }
 
+
 // poll buttons and switch and respond
 void processButtons() {
+  pollSwitch();
   pollBlueButton();
   pollWhiteButton();
-  pollSwitch();
 }
 
-// one-time setup on power-up
-void setup() {
-  Serial.begin(57600);
+void initPins() {
   pinMode(LATCHPIN, OUTPUT);
   pinMode(CLOCKPIN, OUTPUT);
   pinMode(DATAPIN, OUTPUT);
   pinMode(SWITCHPIN, INPUT);
   pinMode(WHITEBUTTONPIN, INPUT);
   pinMode(BLUEBUTTONPIN, INPUT);
+}
+
+void initLEDS() {
   sendData(0x0900);  // set all digits to no-decode mode
   sendData(0x0A0F);  // set intensity to 100%
   sendData(0x0B05);  // set scan range to six digits
   allOff();
-  testFlash(250);
-  testFlash(250);
-  testFlash(250);
+  testFlash(150);
+  testFlash(150);
+  testFlash(150);
   sendData(0x0C01);       // disable shutdown mode to begin normal operation
+}
 
+void initUSB() {
   if (Usb.Init() == -1) {
     Serial.println("USB failed to init");
     while (1); // halt
   }
   Serial.println("USB initialized successfully!");
-  mode = STARRY;
+}
+
+// one-time setup on power-up
+void setup() {
+  Serial.begin(57600);
+  initPins();
+  initLEDS();
+  initUSB();
+  pollSwitch();
+  pianomode = STARRY;
+  automode = ALLON;
   delay(50);
 }
 
@@ -553,3 +645,4 @@ void loop() {
 // tune colunmns horizontal interval widths to match common playing intervals, kind of like thirds in starry mode
 // make columns re-flash repeated sustained columns like starry mode. Maybe also reflash decaying notes that are still on (I will get that for free I think)
 // lucinda says sustained columns should decay faster so you can actually see them, and also maybe fire up as well
+
