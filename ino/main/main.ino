@@ -466,10 +466,10 @@ void switchUp() {
     if (automode == ALLON) {
       startAllOn();
     } else if (automode == RAINY) {
-      startRainy():
+      startRainy();
     }
   } else {
-    Serial.println("Switch going up but already in auto mode. Should not get here!!!"):
+    Serial.println("Switch going up but already in auto mode. Should not get here!!!");
   }
 }
 
@@ -484,7 +484,7 @@ void switchDown() {
     globalmode = PIANO;
     // !! I don't think I need to init any piano-mode specific stuff, but if I did, this is where I would do it.
   } else {
-    Serial.println("Switch going down but already in piano mode. Should not get here!!!"):
+    Serial.println("Switch going down but already in piano mode. Should not get here!!!");
   }
 }
 
