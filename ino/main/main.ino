@@ -63,6 +63,16 @@ enum coldecaystyles{SUSTAIN, FALL};   // column decay styles for COLUMNS mode
 unsigned long nextdroptime = 0;        // time to launch the next raindrop
 // reuses scheduled[]                  // times to illuminate next falling drops
 unsigned long scheduledoff[30] = {0};  // times to deluminate falling drops
+struct raindrop { 
+  int col;
+  int speed;
+  int length;
+  int leadingedge;
+  unsigned long updatetime;
+};
+struct raindrop raindrops[15];
+int nextdropid = 0; // pointer through raindrops
+
 
 
 // #################
@@ -375,16 +385,6 @@ void resetAllOnMode() {
 // dropletes schedule themselves one jump at a time, so on each illumination, it schedules the next one. Check if there is a pending schedule there, and only replace it if the new one is earlier
 // On each delumination, schedule the next one. Check if there is a pending delumination scheduled there, and only overwrite if the new one is later
 
-struct raindrop { 
-  int col;
-  int speed;
-  int length;
-  int leadingedge;
-  unsigned long updatetime;
-};
-struct raindrop raindrops[15];
-int nextdropid = 0; // pointer through raindrops
-
 // returns a random future time between 100 and 2600 ms from now, quadratically weighted towards 100
 unsigned long getNextDropTime() {
   return millis() + 100 + sq(rand() % 50);
@@ -394,14 +394,15 @@ unsigned long getNextDropTime() {
 void scheduleNext(unsigned long now, int dropid) {
   raindrops[dropid].leadingedge++;
   if (raindrops[dropid].leadingedge < 4) { // schedule a new illumination and delumination
-    unsigned long existingschedule = scheduled[raindrops[dropid].col * 5 + leadingedge];
+    int leadingedgepos = leadingedgepos;
+    unsigned long existingschedule = scheduled[leadingedgepos];
     unsigned long newschedule = raindrops[dropid].updatetime + raindrops[dropid].speed;
     if (existingschedule < now || existingschedule > newschedule) // only overwrite if empty/old existing, or existing is later than new
-      scheduled[raindrops[dropid].col * 5 + leadingedge] = newschedule;
-    unsigned long existingscheduleoff = scheduledoff[raindrops[dropid].col * 5 + leadingedge];
+      scheduled[leadingedgepos] = newschedule;
+    unsigned long existingscheduleoff = scheduledoff[leadingedgepos];
     unsigned long newscheduleoff = newschedule + (raindrops[dropid].speed * raindrops[dropid].length);
     if (existingscheduleoff < now || existingscheduleoff < newscheduleoff) // only overwrite if empty/old existing, or existing is sooner than new
-      scheduledoff[raindrops[dropid].col * 5 + leadingedge] = newscheduleoff;
+      scheduledoff[leadingedgepos] = newscheduleoff;
   raindrops[dropid].updatetime += raindrops[dropid].speed;
   } else {
     raindrops[dropid].updatetime = 0;
