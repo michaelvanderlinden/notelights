@@ -372,35 +372,75 @@ void resetAllOnMode() {
 
 // on random time intervals, trigger "droplets" to fall down a column.
 // droplets have a random length (1-3) and speed
+// dropletes schedule themselves one jump at a time, so on each illumination, it schedules the next one. Check if there is a pending schedule there, and only replace it if the new one is earlier
+// On each delumination, schedule the next one. Check if there is a pending delumination scheduled there, and only overwrite if the new one is later
+
+struct raindrop { 
+  int col;
+  int speed;
+  int length;
+  int leadingedge;
+  unsigned long updatetime;
+};
+struct raindrop raindrops[15];
+int nextdropid = 0; // pointer through raindrops
 
 // returns a random future time between 100 and 2600 ms from now, quadratically weighted towards 100
 unsigned long getNextDropTime() {
   return millis() + 100 + sq(rand() % 50);
 }
 
-// schedule falling illuminate and deluminate times
-void scheduleDrop(unsigned long now, int col, int speed, int length) {
-  for (int i = 1; i < 5; i++) {
-    scheduled   [col * 5 + i] =  now + (speed * i);
-    scheduledoff[col * 5 + i] =  now + (speed * (i + length));
-    scheduledoff[col * 5]     =  now + (speed * length);
+// schedules next illumination and delumination for a particular drop, respecting pre-existing schedules, and updates drop struct
+void scheduleNext(unsigned long now, int dropid) {
+  raindrops[dropid].leadingedge++;
+  if (raindrops[dropid].leadingedge < 4) { // schedule a new illumination and delumination
+    unsigned long existingschedule = scheduled[raindrops[dropid].col * 5 + leadingedge];
+    unsigned long newschedule = raindrops[dropid].updatetime + raindrops[dropid].speed;
+    if (existingschedule < now || existingschedule > newschedule) // only overwrite if empty/old existing, or existing is later than new
+      scheduled[raindrops[dropid].col * 5 + leadingedge] = newschedule;
+    unsigned long existingscheduleoff = scheduledoff[raindrops[dropid].col * 5 + leadingedge];
+    unsigned long newscheduleoff = newschedule + (raindrops[dropid].speed * raindrops[dropid].length);
+    if (existingscheduleoff < now || existingscheduleoff < newscheduleoff) // only overwrite if empty/old existing, or existing is sooner than new
+      scheduledoff[raindrops[dropid].col * 5 + leadingedge] = newscheduleoff;
+  raindrops[dropid].updatetime += raindrops[dropid].speed;
+  } else {
+    raindrops[dropid].updatetime = 0;
   }
-  // !! this will make new drops annihilate drops below them. One way to avoid this is to save drop state and have each drop schedule its own path downwards
 }
 
-void launchDrop(unsigned long now) {
-  int col = rand() % 6;
-  int speed = 120 + (rand() % 90);  // 120 to 210 ms per drop
-  int length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
-  scheduleDrop(now, col, speed, length);
+
+// void scheduleDrop(unsigned long now, int col, int speed, int length) {
+//   for (int i = 1; i < 5; i++) {
+//     scheduled   [col * 5 + i] =  now + (speed * i);
+//     scheduledoff[col * 5 + i] =  now + (speed * (i + length));
+//     scheduledoff[col * 5]     =  now + (speed * length);
+//   }
+//   // !! this will make new drops annihilate drops below them. One way to avoid this is to save drop state and have each drop schedule its own path downwards
+// }
+
+void launchDrop(unsigned long now, int dropid) {
+  struct raindrop drop = raindrops[dropid];
+  drop.col = rand() % 6;
+  drop.speed = 120 + (rand() % 90);  // 120 to 210 ms per drop
+  drop.length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
+  drop.leadingedge = 0;
+  drop.updatetime = now;
+  scheduleNext(dropid);
   illuminate(col * 5); // illuminate top of column
 }
 
 void processRainyTimeDelays(unsigned long now) {
+  // occasionally launch another drop
   if (now >= nextdroptime) {
-    launchDrop(now);
+    launchDrop(now, nextdropid);
     nextdroptime = getNextDropTime();
+    nextdropid = (nextdropid + 1) % 15;
   }
+  // check raindrop structs to make new schedules
+  for (int i = 0, i < 15; i++)
+    if (raindrops[i].updatetime != 0 && raindrops[i].updatetime <= now)
+      scheduleNext(i);
+  // check LED schedules and illuminate or deluminate
   for (int i = 0; i < 30; i++) {
     if (scheduled[i] != 0 && status[i] == 0 && now >= scheduled[i]) {
       illuminate(i);
@@ -419,8 +459,10 @@ void startRainy() {
 void resetRainyMode() {
   memset(status, 0, sizeof(status));
   memset(nextdroptime, 0, sizeof(nextdroptime));
+  memset(nextdropid, 0, sizeof(nextdropid)):
   memset(scheduled, 0, sizeof(scheduled));
   memset(scheduledoff, 0, sizeof(scheduledoff));
+  memset(raindrops, 0, sizeof(raindrops));
   allOff();
 }
 
