@@ -51,13 +51,18 @@ uint8_t status[30] = {0};
 // Starry structs
 uint8_t assigned[30] = {0}; // assigned persistent note ids of each light. Although the midi scale goes down to noteid 0, lowest note on 88-key piano (A0) has code 21
 unsigned long timestamps[30] = {0}; // holds the timestamps for when notes were assigned
-unsigned long scheduled[30] = {0};  // holds timestamps for when scheduled notes should come on
+unsigned long scheduled[30] = {0};  // holds timestamps for when scheduled notes should come on - also used by rainy
 uint8_t maxedout[3] = {0};          // flag for when each third of assigned array is totally full
 
 // Column structs
-unsigned long coldecays[30] = {0};    // keeps track of time at which each column segment will decay
+unsigned long coldecays[30] = {0};    // keeps track of time at which each column segment will decay !! I should just reuse scheduled[] for this
 uint8_t colstatus[6] = {0};           // in COLUMN mode: 0 means released (totally off or decaying in FALL pattern), 1 means on under key press or press + sustain, 2 means on under sustain alone (1 and 2 are decaying in SUSTAIN pattern)
 enum coldecaystyles{SUSTAIN, FALL};   // column decay styles for COLUMNS mode
+
+// Rainy structs
+unsigned long nextdroptime = 0;        // time to launch the next raindrop
+// reuses scheduled[]                  // times to illuminate next falling drops
+unsigned long scheduledoff[30] = {0};  // times to deluminate falling drops
 
 
 // #################
@@ -155,7 +160,7 @@ int replaceOldest(int noteid) {
       pos = i;
     }
   }
-  if (pos == -1) // all lights on, just evict randomly // !! I think timestamp eviction is failing to evict oldest because we're always getting down here. This should be rare case
+  if (pos == -1) // all lights on, just evict randomly
     pos = (rand() % 10) + offset;
   assigned[pos] = noteid;
   return pos;
@@ -215,6 +220,15 @@ void processStarrySustainOff() {
   }
 }
 
+void processStarryTimeDelays(unsigned long now) {
+  for (int i = 0; i < 30; i++) {
+    if (status[i] == 3 && now >= scheduled[i]) {
+      illuminate(i);
+      timestamps[i] = now;
+    }
+  }
+}
+
 // #####################
 // COLUMN MODE FUNCTIONS
 // #####################
@@ -233,7 +247,7 @@ void resetColMode() {
 }
 
 // returns the index (0-5) of a column to use in column mode
-// columns are not tied to particular notes, but rather note ranges. Every time a new note is played in the range, it re-fires the column. !! this might looks ugly or just max-out the wall.
+// columns are not tied to particular notes, but rather note ranges. Every time a new note is played in the range, it re-fires the column.
 int findCol(int noteid) {
   int scaled = noteid - 21; // 88 keys. Ranges: 20 14 10 10 14 20
   if (scaled >= 68)
@@ -331,6 +345,14 @@ void processColSustainOff() {
   }
 }
 
+void processColTimeDelays(unsigned long now) {
+  for (int i = 0; i < 30; i++) {
+    if (coldecays[i] != 0 && now >= coldecays[i]) {
+      deluminate(i, false);
+      coldecays[i] = 0;
+    }
+  }
+}
 
 // #####################
 // ALL ON MODE FUNCTIONS
@@ -348,12 +370,58 @@ void resetAllOnMode() {
 // RAINY MODE FUNCTIONS
 // ####################
 
+// on random time intervals, trigger "droplets" to fall down a column.
+// droplets have a random length (1-3) and speed
+
+// returns a random future time between 100 and 2600 ms from now, quadratically weighted towards 100
+unsigned long getNextDropTime() {
+  return millis() + 100 + sq(rand() % 50);
+}
+
+// schedule falling illuminate and deluminate times
+void scheduleDrop(unsigned long now, int col, int speed, int length) {
+  for (int i = 1; i < 5; i++) {
+    scheduled   [col * 5 + i] =  now + (speed * i);
+    scheduledoff[col * 5 + i] =  now + (speed * (i + length));
+    scheduledoff[col * 5]     =  now + (speed * length);
+  }
+  // !! this will make new drops annihilate drops below them. One way to avoid this is to save drop state and have each drop schedule its own path downwards
+}
+
+void launchDrop(unsigned long now) {
+  int col = rand() % 6;
+  int speed = 120 + (rand() % 90);  // 120 to 210 ms per drop
+  int length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
+  scheduleDrop(now, col, speed, length);
+  illuminate(col * 5); // illuminate top of column
+}
+
+void processRainyTimeDelays(unsigned long now) {
+  if (now >= nextdroptime) {
+    launchDrop(now);
+    nextdroptime = getNextDropTime();
+  }
+  for (int i = 0; i < 30; i++) {
+    if (scheduled[i] != 0 && status[i] == 0 && now >= scheduled[i]) {
+      illuminate(i);
+      scheduled[i] = 0;
+    } else if (scheduledoff[i] != 0 && status[i] == 1 && now >= scheduledoff[i]) {
+      deluminate(i, false);
+      scheduledoff[i] = 0;
+    }
+  }
+}
+
 void startRainy() {
-  Serial.println("starting rainy mode placeholder");
+  nextdroptime = getNextDropTime();
 }
 
 void resetRainyMode() {
-  Serial.println("ending rainy mode placeholder");
+  memset(status, 0, sizeof(status));
+  memset(nextdroptime, 0, sizeof(nextdroptime));
+  memset(scheduled, 0, sizeof(scheduled));
+  memset(scheduledoff, 0, sizeof(scheduledoff));
+  allOff();
 }
 
 // #######################
@@ -469,7 +537,7 @@ void switchUp() {
       startRainy();
     }
   } else {
-    Serial.println("Switch going up but already in auto mode. Should not get here!!!");
+    Serial.println("Switch going up but already in auto mode. Should not get here");
   }
 }
 
@@ -484,7 +552,7 @@ void switchDown() {
     globalmode = PIANO;
     // !! I don't think I need to init any piano-mode specific stuff, but if I did, this is where I would do it.
   } else {
-    Serial.println("Switch going down but already in piano mode. Should not get here!!!");
+    Serial.println("Switch going down but already in piano mode. Should not get here");
   }
 }
 
@@ -512,20 +580,14 @@ void processMidi(void) {
 // take any led actions that are scheduled for some time in the future
 void processTimeDelays() {
   unsigned long now = millis(); 
-  if (pianomode == STARRY) {
-    for (int i = 0; i < 30; i++) {
-      if (status[i] == 3 && now >= scheduled[i]) {
-        illuminate(i);
-        timestamps[i] = now;
-      }
-    }
-  } else if (pianomode == COLUMNS) {
-    for (int i = 0; i < 30; i++) {
-      if (coldecays[i] != 0 && now >= coldecays[i]) {
-        deluminate(i, false);
-        coldecays[i] = 0;
-      }
-    }
+  if (globalmode == PIANO) {
+    if (pianomode == STARRY) 
+      processStarryTimeDelays(now);
+    else if (pianomode == COLUMNS) 
+      processColTimeDelays(now);
+  } else if (globalmode == AUTO) {
+    if (automode == RAINY)
+      processRainyTimeDelays(now);
   }
 }
 
@@ -619,6 +681,7 @@ void setup() {
   initLEDS();
   initUSB();
   pollSwitch();
+  randomSeed(analogRead(4));
   pianomode = STARRY;
   automode = ALLON;
   delay(50);
@@ -637,7 +700,6 @@ void loop() {
 // could adjust by range: high (melody) notes get solo treatment, while bass notes are bundled to avoid clutter
 
 
-// !! at some point I should probably ENUM the statuses
 // !! if compiled size starts to become a problem, one small tip is to use uint8_t or int8_t instead of int where possible
 
 // todo:
