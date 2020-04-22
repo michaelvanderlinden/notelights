@@ -420,14 +420,13 @@ void scheduleNext(unsigned long now, int dropid) {
 // }
 
 void launchDrop(unsigned long now, int dropid) {
-  struct raindrop drop = raindrops[dropid];
-  drop.col = rand() % 6;
-  drop.speed = 120 + (rand() % 90);  // 120 to 210 ms per drop
-  drop.length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
-  drop.leadingedge = 0;
-  drop.updatetime = now;
-  scheduleNext(dropid);
-  illuminate(col * 5); // illuminate top of column
+  raindrops[dropid].col = rand() % 6;
+  raindrops[dropid].speed = 120 + (rand() % 90);  // 120 to 210 ms per drop
+  raindrops[dropid].length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
+  raindrops[dropid].leadingedge = 0;
+  raindrops[dropid].updatetime = now;
+  scheduleNext(now, dropid);
+  illuminate(raindrops[dropid].col * 5); // illuminate top of column
 }
 
 void processRainyTimeDelays(unsigned long now) {
@@ -438,9 +437,9 @@ void processRainyTimeDelays(unsigned long now) {
     nextdropid = (nextdropid + 1) % 15;
   }
   // check raindrop structs to make new schedules
-  for (int i = 0, i < 15; i++)
+  for (int i = 0; i < 15; i++)
     if (raindrops[i].updatetime != 0 && raindrops[i].updatetime <= now)
-      scheduleNext(i);
+      scheduleNext(now, i);
   // check LED schedules and illuminate or deluminate
   for (int i = 0; i < 30; i++) {
     if (scheduled[i] != 0 && status[i] == 0 && now >= scheduled[i]) {
@@ -460,7 +459,7 @@ void startRainy() {
 void resetRainyMode() {
   memset(status, 0, sizeof(status));
   memset(nextdroptime, 0, sizeof(nextdroptime));
-  memset(nextdropid, 0, sizeof(nextdropid)):
+  memset(nextdropid, 0, sizeof(nextdropid));
   memset(scheduled, 0, sizeof(scheduled));
   memset(scheduledoff, 0, sizeof(scheduledoff));
   memset(raindrops, 0, sizeof(raindrops));
