@@ -9,28 +9,30 @@
 USB Usb;
 USBH_MIDI Midi(&Usb);
 
-const int DATAPIN = 2;  // connected to DIN (1) of MAX7219 (yellow)
-const int LATCHPIN = 5;  // connected to LOAD (12) of MAX7219 (green)
-const int CLOCKPIN = 7; // connected to CLK (13) of MAX7219 (white)
-const int SWITCHPIN = A0;
-const int WHITEBUTTONPIN = A2;
-const int BLUEBUTTONPIN = A1;
-const int DEBOUNCEDELAY = 30; // milliseconds to wait before registering a second press or release of a button or switch
-const unsigned int RESCHEDULEDELAY = 100; // time delay in milliseconds to darken repeated sustained notes
-const uint8_t MIDIBOUND1 = 53;   // notes below the F below middle C are in lower third (left two columns)
-const uint8_t MIDIBOUND2 = 72;   // notes above the C above middle C are in upper third (right two columns)
-const int OFFSIGNALS[6] = {256, 512, 768, 1024, 1280, 1536}; // MAX7219 messages to turn off each column
-const int DECAYPROFILESUSTAIN[5] = {2000, 3000, 3700, 5000, 8000}; // decay times for a sustained note
-const int DECAYPROFILEFALL[5] = {40, 80, 120, 160, 200}; // decay times for a falling note
+// global consts and definitions
+#define DATAPIN 2;  // connected to DIN (1) of MAX7219 (yellow)
+#define LATCHPIN 5;  // connected to LOAD (12) of MAX7219 (green)
+#define CLOCKPIN 7; // connected to CLK (13) of MAX7219 (white)
+#define SWITCHPIN A0;
+#define WHITEBUTTONPIN A2;
+#define BLUEBUTTONPIN A1;
+#define DEBOUNCEDELAY 30; // milliseconds to wait before registering a second press or release of a button or switch
+#define RESCHEDULEDELAY 100; // time delay in milliseconds to darken repeated sustained notes
+#define MIDIBOUND1 53;   // notes below the F below middle C are in lower third (left two columns)
+#define MIDIBOUND2 72;   // notes above the C above middle C are in upper third (right two columns)
+#define DROPBUFFERSIZE 9;
+static const int OFFSIGNALS[6] = {256, 512, 768, 1024, 1280, 1536}; // MAX7219 messages to turn off each column
+static const int DECAYPROFILESUSTAIN[5] = {2000, 3000, 3700, 5000, 8000}; // decay times for a sustained note
+static const int DECAYPROFILEFALL[5] = {40, 80, 120, 160, 200}; // decay times for a falling note
+
+// global flags and structs
+// all flat 30-arrays are arranged top to bottom, left to right. G on top (LSB), C on bottom (MSB)
 enum globalmodes{PIANO, AUTO};      // global switch modes
 enum globalmodes globalmode;        // global switch mode variable
 enum pianomodes{STARRY, COLUMNS};   // global pianomodes
 enum pianomodes pianomode;          // global pianomode variable
 enum automodes{RAINY, ALLON};       // global automodes
 enum automodes automode;            // global automode variable
-
-// global flags and structs
-// all flat 30-arrays are arranged top to bottom, left to right. G on top (LSB), C on bottom (MSB)
 uint8_t switchState = 0;       // on or off
 uint8_t blueState = 0;          
 uint8_t whiteState = 0;
@@ -46,32 +48,30 @@ uint8_t status[30] = {0};
 // STARRY mode: 0 means off, 1 means on under key press or press + sustain, 2 means on under sustain alone, 
 // 3 means temporarily off under sustained re-press.
 // Any note in state 3 is guaranteed to be both actively pressed and sustained. 
-// COLUMN mode (and perhaps others) uses states 0 and 1
+// COLUMN mode and RAINY mode uses states 0 and 1 with illuminate and deluminate
 
 // Starry structs
 uint8_t assigned[30] = {0}; // assigned persistent note ids of each light. Although the midi scale goes down to noteid 0, lowest note on 88-key piano (A0) has code 21
 unsigned long timestamps[30] = {0}; // holds the timestamps for when notes were assigned
-unsigned long scheduled[30] = {0};  // holds timestamps for when scheduled notes should come on - also used by rainy
+unsigned long scheduled[30] = {0};  // holds timestamps for when scheduled notes should come on
 uint8_t maxedout[3] = {0};          // flag for when each third of assigned array is totally full
 
 // Column structs
-unsigned long coldecays[30] = {0};    // keeps track of time at which each column segment will decay !! I should just reuse scheduled[] for this
-uint8_t colstatus[6] = {0};           // in COLUMN mode: 0 means released (totally off or decaying in FALL pattern), 1 means on under key press or press + sustain, 2 means on under sustain alone (1 and 2 are decaying in SUSTAIN pattern)
+// recycles scheduled[30] = {0};      // keeps track of time at which each column segment will decay
+uint8_t colstatus[6] = {0};           // keeps track of status for each column. 0 means released (totally off or decaying in FALL pattern), 1 means on under key press or press + sustain, 2 means on under sustain alone (1 and 2 are decaying in SUSTAIN pattern)
 enum coldecaystyles{SUSTAIN, FALL};   // column decay styles for COLUMNS mode
 
 // Rainy structs
-unsigned long nextdroptime = 0;        // time to launch the next raindrop
-// reuses scheduled[]                  // times to illuminate next falling drops
-unsigned long scheduledoff[30] = {0};  // times to deluminate falling drops
+unsigned long nextdroptime = 0;       // time to launch the next raindrop
 struct raindrop { 
-  int col;
+  int8_t col;
   int speed;
-  int length;
-  int depth;
-  unsigned long updatetime;
+  int8_t length;
+  int8_t depth;
+  unsigned long nextupdate;
 };
-struct raindrop raindrops[9];
-int nextdropid = 0; // pointer through raindrops
+struct raindrop raindrops[DROPBUFFERSIZE]; // keeps track of parameters and status of each active drop
+uint8_t nextdropid = 0; // index through raindrops
 
 
 
@@ -79,7 +79,7 @@ int nextdropid = 0; // pointer through raindrops
 // MAX7219 FUNCTIONS
 // #################
 
-// returns a MAX7219 update digit (column) message, based on the current state of status array
+// returns a 16-bit MAX7219 update digit (column) message, based on the current state of status array
 int buildMessage(int digit) {
   int start = digit * 5; // starting point for reading through status array
   int segments = 0;
@@ -252,7 +252,7 @@ void processStarryTimeDelays(unsigned long now) {
 void resetColMode() {
   memset(status, 0, sizeof(status));
   memset(colstatus, 0, sizeof(colstatus));
-  memset(coldecays, 0, sizeof(coldecays));
+  memset(scheduled, 0, sizeof(scheduled));
   allOff();
 }
 
@@ -313,13 +313,13 @@ void setColDecays(int col, int height, enum coldecaystyles style) {
   for (int i = 0; i < 5; i++) { // reset and overwrite column decays in one pass. i counts from bottom of column to top
     if (i < height) {
       if (style == SUSTAIN)
-        coldecays[col * 5 + 4 - i] = now + DECAYPROFILESUSTAIN[height - 1 - i];
+        scheduled[col * 5 + 4 - i] = now + DECAYPROFILESUSTAIN[height - 1 - i];
       else
-        coldecays[col * 5 + 4 - i] = now + DECAYPROFILEFALL[height - 1 - i];
+        scheduled[col * 5 + 4 - i] = now + DECAYPROFILEFALL[height - 1 - i];
     } else {
-      coldecays[col * 5 + 4 - i] = 0;
+      scheduled[col * 5 + 4 - i] = 0;
     }
-    // Serial.print("level "); Serial.print(i); Serial.print(" time "); Serial.println(coldecays[col * 5 + 4 - i]);
+    // Serial.print("level "); Serial.print(i); Serial.print(" time "); Serial.println(scheduled[col * 5 + 4 - i]);
   }
 }
 
@@ -357,11 +357,82 @@ void processColSustainOff() {
 
 void processColTimeDelays(unsigned long now) {
   for (int i = 0; i < 30; i++) {
-    if (coldecays[i] != 0 && now >= coldecays[i]) {
+    if (scheduled[i] != 0 && now >= scheduled[i]) {
       deluminate(i, false);
-      coldecays[i] = 0;
+      scheduled[i] = 0;
     }
   }
+}
+
+// ####################
+// RAINY MODE FUNCTIONS
+// ####################
+
+// on random time intervals, trigger "droplets" to fall down a column.
+// droplets have a random length (1-3) and speed
+// droplets schedule themselves one jump at a time, so on each illumination, it schedules the next one. Check if there is a pending schedule there, and only replace it if the new one is earlier
+// On each delumination, schedule the next one. Check if there is a pending delumination scheduled there, and only overwrite if the new one is later
+
+// returns a random future time between 100 and 2600 ms from now, quadratically weighted towards 100
+unsigned long getNextDropTime(unsigned long now) {
+  return now + 100 + sq(rand() % 50);
+}
+
+// returns true if any drop is currently lighting up the led at col, row
+bool anyDropsActive(int8_t col, int row) {
+  for (int i = 0; i < DROPBUFFERSIZE; i++) {
+    if (col == raindrops[i].col && row <= raindrops[i].depth && row > raindrops[i].depth - raindrops[i].length) // invalid (-1 col) entries will not match col
+      return true;
+  }
+  return false;
+}
+
+void advanceDrop(struct raindrop * drop) {
+  drop.depth++;
+  if (drop.depth <= 4)
+    illuminate(drop.col * 5 + drop.depth); // advance front of drop, but not farther than bottom
+  int taildepth = drop.depth - drop.length; // position of tail of drop that will be "deluminated"
+  if (taildepth >= 0 && taildepth <= 4 && !anyDropsActive(drop.col, taildepth)) // tail is on board and no other drops holding on to taildepth position
+    deluminate(taildepth); // release tail of drop
+  drop.nextupdate += drop.speed; // schedule next update
+  if (taildepth >= 4) // tail just dropped off board
+    drop.col = -1; // mark buffer entry as invalid
+}
+
+void launchDrop(unsigned long now, struct raindrop * drop) {
+  drop.col = rand() % 6;
+  drop.speed = 120 + (rand() % 90);  // 120 to 210 ms per descent step
+  drop.length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
+  drop.depth = 0;
+  drop.nextupdate = now + drop.speed;
+  illuminate(drop.col * 5); // illuminate top of column
+}
+
+void processRainyTimeDelays(unsigned long now) {
+  // occasionally launch another drop
+  if (now >= nextdroptime) {
+    launchDrop(now, &raindrops[nextdropid]); // !!!! &[]
+    nextdroptime = getNextDropTime(now);
+    nextdropid = (nextdropid + 1) % DROPBUFFERSIZE;
+  }
+  // check raindrop structs to advance drops
+  for (int i = 0; i < DROPBUFFERSIZE; i++)
+    if (raindrops[i].col != -1 && raindrops[i].nextupdate <= now)
+      advanceDrop(&raindrops[i]); // !!!! &[]
+}
+
+void startRainy() {
+  for (int i = 0; i < DROPBUFFERSIZE; i++)
+    raindrops[i].col = -1; // mark all entries as invalid
+  nextdroptime = getNextDropTime(millis());
+}
+
+void resetRainyMode() {
+  memset(status, 0, sizeof(status));
+  memset(nextdroptime, 0, sizeof(nextdroptime));
+  memset(nextdropid, 0, sizeof(nextdropid));
+  memset(raindrops, 0, sizeof(raindrops));
+  allOff();
 }
 
 // #####################
@@ -374,97 +445,6 @@ void startAllOn() {
 
 void resetAllOnMode() {
   sendData(0x0F00); // disable test mode
-}
-
-// ####################
-// RAINY MODE FUNCTIONS
-// ####################
-
-// on random time intervals, trigger "droplets" to fall down a column.
-// droplets have a random length (1-3) and speed
-// dropletes schedule themselves one jump at a time, so on each illumination, it schedules the next one. Check if there is a pending schedule there, and only replace it if the new one is earlier
-// On each delumination, schedule the next one. Check if there is a pending delumination scheduled there, and only overwrite if the new one is later
-
-// returns a random future time between 100 and 2600 ms from now, quadratically weighted towards 100
-unsigned long getNextDropTime() {
-  return millis() + 100 + sq(rand() % 50);
-}
-
-// schedules next illumination and delumination for a particular drop, respecting pre-existing schedules, and updates drop struct
-void scheduleNext(unsigned long now, int dropid) {
-  if (raindrops[dropid].depth < 5) { // schedule a new illumination and delumination
-    if (dropid == 4) {
-      Serial.print("scheduling drop 4, depth: "); Serial.print(raindrops[dropid].depth); Serial.print(" time: "); Serial.println(raindrops[dropid].updatetime);
-    }
-    int pos = raindrops[dropid].col * 5 + raindrops[dropid].depth;
-    unsigned long newschedule = raindrops[dropid].updatetime + raindrops[dropid].speed;
-    if (scheduled[pos] < now || scheduled[pos] > newschedule) // only overwrite if empty/old existing, or existing is later than new
-      scheduled[pos] = newschedule;
-    unsigned long newscheduleoff = newschedule + (raindrops[dropid].speed * raindrops[dropid].length);
-    if (scheduledoff[pos] < now || scheduledoff[pos] < newscheduleoff) // only overwrite if empty/old existing, or existing is sooner than new
-      scheduledoff[pos] = newscheduleoff;
-    raindrops[dropid].updatetime += raindrops[dropid].speed;
-  } else {
-    raindrops[dropid].updatetime = 0;
-  }
-  raindrops[dropid].depth++;
-}
-
-
-// void scheduleDrop(unsigned long now, int col, int speed, int length) {
-//   for (int i = 1; i < 5; i++) {
-//     scheduled   [col * 5 + i] =  now + (speed * i);
-//     scheduledoff[col * 5 + i] =  now + (speed * (i + length));
-//     scheduledoff[col * 5]     =  now + (speed * length);
-//   }
-//   // !! this will make new drops annihilate drops below them. One way to avoid this is to save drop state and have each drop schedule its own path downwards
-// }
-
-void launchDrop(unsigned long now, int dropid) {
-  raindrops[dropid].col = rand() % 6;
-  raindrops[dropid].speed = 120 + (rand() % 90);  // 120 to 210 ms per drop
-  raindrops[dropid].length = (rand() % 100) < -1 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
-  raindrops[dropid].depth = 0;
-  raindrops[dropid].updatetime = now;
-  scheduleNext(now, dropid);
-  // illuminate(raindrops[dropid].col * 5); // illuminate top of column
-}
-
-void processRainyTimeDelays(unsigned long now) {
-  // occasionally launch another drop
-  if (now >= nextdroptime) {
-    launchDrop(now, nextdropid);
-    nextdroptime = getNextDropTime();
-    nextdropid = (nextdropid + 1) % 9;
-  }
-  // check raindrop structs to make new schedules
-  for (int i = 0; i < 9; i++)
-    if (raindrops[i].updatetime != 0 && raindrops[i].updatetime <= now)
-      scheduleNext(now, i);
-  // check LED schedules and illuminate or deluminate
-  for (int i = 0; i < 30; i++) {
-    if (scheduled[i] != 0 && status[i] == 0 && now >= scheduled[i]) {
-      illuminate(i);
-      scheduled[i] = 0;
-    } else if (scheduledoff[i] != 0 && status[i] == 1 && now >= scheduledoff[i]) {
-      deluminate(i, false);
-      scheduledoff[i] = 0;
-    }
-  }
-}
-
-void startRainy() {
-  nextdroptime = getNextDropTime();
-}
-
-void resetRainyMode() {
-  memset(status, 0, sizeof(status));
-  memset(nextdroptime, 0, sizeof(nextdroptime));
-  memset(nextdropid, 0, sizeof(nextdropid));
-  memset(scheduled, 0, sizeof(scheduled));
-  memset(scheduledoff, 0, sizeof(scheduledoff));
-  memset(raindrops, 0, sizeof(raindrops));
-  allOff();
 }
 
 // #######################
@@ -717,7 +697,7 @@ void initUSB() {
   Serial.println("USB initialized successfully!");
 }
 
-// one-time setup on power-up
+// ARDUINO SETUP
 void setup() {
   Serial.begin(57600);
   initPins();
@@ -730,12 +710,11 @@ void setup() {
   delay(50);
 }
 
-// main loop after setup
+// ARDUINO LOOP
 void loop() {
   processButtons();
   processMidi();
   processTimeDelays();
-
   delay(2); // !! rather than delay, maybe just use millis to poll the midi source every 2 or 3 ms.
 }
 
