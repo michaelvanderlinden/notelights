@@ -390,10 +390,11 @@ bool anyDropsActive(int8_t col, int row) {
 void advanceDrop(struct raindrop * drop) {
   drop->depth++;
   if (drop->depth <= 4)
-    illuminate(drop->col * 5 + drop->depth); // advance front of drop, but not farther than bottom
-  int taildepth = drop->depth - drop->length; // position of tail of drop that will be "deluminated"
+    status[drop->col * 5 + drop->depth] = 1; // illuminate(drop->col * 5 + drop->depth); // advance front of drop, but not farther than bottom
+  int taildepth = drop->depth - drop->length; // position of tail of drop that may be deluminated
   if (taildepth >= 0 && taildepth <= 4 && !anyDropsActive(drop->col, taildepth)) // tail is on board and no other drops holding on to taildepth position
-    deluminate(drop->col * 5 + taildepth, false); // release tail of drop
+    status[drop->col * 5 + taildepth] = 0; // deluminate(drop->col * 5 + taildepth, false); // release tail of drop
+  sendData(buildMessage(drop->col));  // illuminate front and deluminate tail in one message
   drop->nextupdate += drop->speed; // schedule next update
   if (taildepth >= 4) // tail just dropped off board
     drop->col = -1; // mark buffer entry as invalid
