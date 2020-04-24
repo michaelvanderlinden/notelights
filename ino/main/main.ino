@@ -10,17 +10,17 @@ USB Usb;
 USBH_MIDI Midi(&Usb);
 
 // global consts and definitions
-#define DATAPIN 2;  // connected to DIN (1) of MAX7219 (yellow)
-#define LATCHPIN 5;  // connected to LOAD (12) of MAX7219 (green)
-#define CLOCKPIN 7; // connected to CLK (13) of MAX7219 (white)
-#define SWITCHPIN A0;
-#define WHITEBUTTONPIN A2;
-#define BLUEBUTTONPIN A1;
-#define DEBOUNCEDELAY 30; // milliseconds to wait before registering a second press or release of a button or switch
-#define RESCHEDULEDELAY 100; // time delay in milliseconds to darken repeated sustained notes
-#define MIDIBOUND1 53;   // notes below the F below middle C are in lower third (left two columns)
-#define MIDIBOUND2 72;   // notes above the C above middle C are in upper third (right two columns)
-#define DROPBUFFERSIZE 9;
+#define DATAPIN 2   // connected to DIN (1) of MAX7219 (yellow)
+#define LATCHPIN 5  // connected to LOAD (12) of MAX7219 (green)
+#define CLOCKPIN 7  // connected to CLK (13) of MAX7219 (white)
+#define SWITCHPIN A0
+#define WHITEBUTTONPIN A2
+#define BLUEBUTTONPIN A1
+#define DEBOUNCEDELAY 30    // milliseconds to wait before registering a second press or release of a button or switch
+#define RESCHEDULEDELAY 100 // time delay in milliseconds to darken repeated sustained notes
+#define MIDIBOUND1 53       // notes below the F below middle C are in lower third (left two columns)
+#define MIDIBOUND2 72       // notes above the C above middle C are in upper third (right two columns)
+#define DROPBUFFERSIZE 9
 static const int OFFSIGNALS[6] = {256, 512, 768, 1024, 1280, 1536}; // MAX7219 messages to turn off each column
 static const int DECAYPROFILESUSTAIN[5] = {2000, 3000, 3700, 5000, 8000}; // decay times for a sustained note
 static const int DECAYPROFILEFALL[5] = {40, 80, 120, 160, 200}; // decay times for a falling note
@@ -388,37 +388,37 @@ bool anyDropsActive(int8_t col, int row) {
 }
 
 void advanceDrop(struct raindrop * drop) {
-  drop.depth++;
-  if (drop.depth <= 4)
-    illuminate(drop.col * 5 + drop.depth); // advance front of drop, but not farther than bottom
-  int taildepth = drop.depth - drop.length; // position of tail of drop that will be "deluminated"
-  if (taildepth >= 0 && taildepth <= 4 && !anyDropsActive(drop.col, taildepth)) // tail is on board and no other drops holding on to taildepth position
-    deluminate(taildepth); // release tail of drop
-  drop.nextupdate += drop.speed; // schedule next update
+  drop->depth++;
+  if (drop->depth <= 4)
+    illuminate(drop->col * 5 + drop->depth); // advance front of drop, but not farther than bottom
+  int taildepth = drop->depth - drop->length; // position of tail of drop that will be "deluminated"
+  if (taildepth >= 0 && taildepth <= 4 && !anyDropsActive(drop->col, taildepth)) // tail is on board and no other drops holding on to taildepth position
+    deluminate(drop->col * 5 + taildepth, false); // release tail of drop
+  drop->nextupdate += drop->speed; // schedule next update
   if (taildepth >= 4) // tail just dropped off board
-    drop.col = -1; // mark buffer entry as invalid
+    drop->col = -1; // mark buffer entry as invalid
 }
 
 void launchDrop(unsigned long now, struct raindrop * drop) {
-  drop.col = rand() % 6;
-  drop.speed = 120 + (rand() % 90);  // 120 to 210 ms per descent step
-  drop.length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
-  drop.depth = 0;
-  drop.nextupdate = now + drop.speed;
-  illuminate(drop.col * 5); // illuminate top of column
+  drop->col = rand() % 6;
+  drop->speed = 120 + (rand() % 90);  // 120 to 210 ms per descent step
+  drop->length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
+  drop->depth = 0;
+  drop->nextupdate = now + drop->speed;
+  illuminate(drop->col * 5); // illuminate top of column
 }
 
 void processRainyTimeDelays(unsigned long now) {
   // occasionally launch another drop
   if (now >= nextdroptime) {
-    launchDrop(now, &raindrops[nextdropid]); // !!!! &[]
+    launchDrop(now, &raindrops[nextdropid]);
     nextdroptime = getNextDropTime(now);
     nextdropid = (nextdropid + 1) % DROPBUFFERSIZE;
   }
   // check raindrop structs to advance drops
   for (int i = 0; i < DROPBUFFERSIZE; i++)
     if (raindrops[i].col != -1 && raindrops[i].nextupdate <= now)
-      advanceDrop(&raindrops[i]); // !!!! &[]
+      advanceDrop(&raindrops[i]);
 }
 
 void startRainy() {
