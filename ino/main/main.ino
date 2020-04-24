@@ -67,10 +67,10 @@ struct raindrop {
   int col;
   int speed;
   int length;
-  int leadingedge;
+  int depth;
   unsigned long updatetime;
 };
-struct raindrop raindrops[15];
+struct raindrop raindrops[9];
 int nextdropid = 0; // pointer through raindrops
 
 
@@ -392,21 +392,22 @@ unsigned long getNextDropTime() {
 
 // schedules next illumination and delumination for a particular drop, respecting pre-existing schedules, and updates drop struct
 void scheduleNext(unsigned long now, int dropid) {
-  raindrops[dropid].leadingedge++;
-  if (raindrops[dropid].leadingedge < 4) { // schedule a new illumination and delumination
-    int leadingedgepos = leadingedgepos;
-    unsigned long existingschedule = scheduled[leadingedgepos];
+  if (raindrops[dropid].depth < 5) { // schedule a new illumination and delumination
+    if (dropid == 4) {
+      Serial.print("scheduling drop 4, depth: "); Serial.print(raindrops[dropid].depth); Serial.print(" time: "); Serial.println(raindrops[dropid].updatetime);
+    }
+    int pos = raindrops[dropid].col * 5 + raindrops[dropid].depth;
     unsigned long newschedule = raindrops[dropid].updatetime + raindrops[dropid].speed;
-    if (existingschedule < now || existingschedule > newschedule) // only overwrite if empty/old existing, or existing is later than new
-      scheduled[leadingedgepos] = newschedule;
-    unsigned long existingscheduleoff = scheduledoff[leadingedgepos];
+    if (scheduled[pos] < now || scheduled[pos] > newschedule) // only overwrite if empty/old existing, or existing is later than new
+      scheduled[pos] = newschedule;
     unsigned long newscheduleoff = newschedule + (raindrops[dropid].speed * raindrops[dropid].length);
-    if (existingscheduleoff < now || existingscheduleoff < newscheduleoff) // only overwrite if empty/old existing, or existing is sooner than new
-      scheduledoff[leadingedgepos] = newscheduleoff;
-  raindrops[dropid].updatetime += raindrops[dropid].speed;
+    if (scheduledoff[pos] < now || scheduledoff[pos] < newscheduleoff) // only overwrite if empty/old existing, or existing is sooner than new
+      scheduledoff[pos] = newscheduleoff;
+    raindrops[dropid].updatetime += raindrops[dropid].speed;
   } else {
     raindrops[dropid].updatetime = 0;
   }
+  raindrops[dropid].depth++;
 }
 
 
@@ -422,11 +423,11 @@ void scheduleNext(unsigned long now, int dropid) {
 void launchDrop(unsigned long now, int dropid) {
   raindrops[dropid].col = rand() % 6;
   raindrops[dropid].speed = 120 + (rand() % 90);  // 120 to 210 ms per drop
-  raindrops[dropid].length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
-  raindrops[dropid].leadingedge = 0;
+  raindrops[dropid].length = (rand() % 100) < -1 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
+  raindrops[dropid].depth = 0;
   raindrops[dropid].updatetime = now;
   scheduleNext(now, dropid);
-  illuminate(raindrops[dropid].col * 5); // illuminate top of column
+  // illuminate(raindrops[dropid].col * 5); // illuminate top of column
 }
 
 void processRainyTimeDelays(unsigned long now) {
@@ -434,10 +435,10 @@ void processRainyTimeDelays(unsigned long now) {
   if (now >= nextdroptime) {
     launchDrop(now, nextdropid);
     nextdroptime = getNextDropTime();
-    nextdropid = (nextdropid + 1) % 15;
+    nextdropid = (nextdropid + 1) % 9;
   }
   // check raindrop structs to make new schedules
-  for (int i = 0; i < 15; i++)
+  for (int i = 0; i < 9; i++)
     if (raindrops[i].updatetime != 0 && raindrops[i].updatetime <= now)
       scheduleNext(now, i);
   // check LED schedules and illuminate or deluminate
@@ -725,7 +726,7 @@ void setup() {
   pollSwitch();
   randomSeed(analogRead(4));
   pianomode = STARRY;
-  automode = ALLON;
+  automode = RAINY;
   delay(50);
 }
 
