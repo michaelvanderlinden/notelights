@@ -20,19 +20,19 @@ USBH_MIDI Midi(&Usb);
 #define RESCHEDULEDELAY 100 // time delay in milliseconds to darken repeated sustained notes
 #define MIDIBOUND1 53       // notes below the F below middle C are in lower third (left two columns)
 #define MIDIBOUND2 72       // notes above the C above middle C are in upper third (right two columns)
-#define DROPBUFFERSIZE 9
+#define TRAVELERBUFSIZE 12  // max number of travelers to hold in memory at once
 static const int OFFSIGNALS[6] = {256, 512, 768, 1024, 1280, 1536}; // MAX7219 messages to turn off each column
 static const int DECAYPROFILESUSTAIN[5] = {2000, 3000, 3700, 5000, 8000}; // decay times for a sustained note
 static const int DECAYPROFILEFALL[5] = {40, 80, 120, 160, 200}; // decay times for a falling note
 
 // global flags and structs
 // all flat 30-arrays are arranged top to bottom, left to right. G on top (LSB), C on bottom (MSB)
-enum globalmodes{PIANO, AUTO};      // global switch modes
-enum globalmodes globalmode;        // global switch mode variable
-enum pianomodes{STARRY, COLUMNS};   // global pianomodes
-enum pianomodes pianomode;          // global pianomode variable
-enum automodes{RAINY, ALLON};       // global automodes
-enum automodes automode;            // global automode variable
+enum globalmodes{PIANO, AUTO};         // global switch modes
+enum globalmodes globalmode;           // global switch mode variable
+enum pianomodes{STARRY, COLUMNS};      // global pianomodes
+enum pianomodes pianomode;             // global pianomode variable
+enum automodes{RAINY, SNOWY, ALLON};   // global automodes
+enum automodes automode;               // global automode variable
 uint8_t switchState = 0;       // on or off
 uint8_t blueState = 0;          
 uint8_t whiteState = 0;
@@ -61,17 +61,17 @@ uint8_t maxedout[3] = {0};          // flag for when each third of assigned arra
 uint8_t colstatus[6] = {0};           // keeps track of status for each column. 0 means released (totally off or decaying in FALL pattern), 1 means on under key press or press + sustain, 2 means on under sustain alone (1 and 2 are decaying in SUSTAIN pattern)
 enum coldecaystyles{SUSTAIN, FALL};   // column decay styles for COLUMNS mode
 
-// Rainy structs
-unsigned long nextdroptime = 0;       // time to launch the next raindrop
-struct raindrop { 
-  int8_t col;
+// Traveler structs for Rainy, Snowy, Snakey modes
+unsigned long nextlaunchtime = 0;       // time to launch the next traveler
+struct traveler { 
+  int8_t lane;
   int speed;
   int8_t length;
-  int8_t depth;
+  int8_t progress;
   unsigned long nextupdate;
 };
-struct raindrop raindrops[DROPBUFFERSIZE]; // keeps track of parameters and status of each active drop
-uint8_t nextdropid = 0; // index through raindrops
+struct traveler travelers[TRAVELERBUFSIZE]; // keeps track of parameters and status of each active traveler
+uint8_t nexttravelerid = 0; // index through travelers
 
 
 
@@ -364,77 +364,93 @@ void processColTimeDelays(unsigned long now) {
   }
 }
 
-// ####################
-// RAINY MODE FUNCTIONS
-// ####################
+// #######################
+// TRAVELER MODE FUNCTIONS
+// #######################
+
+// These functions apply to RAINY, SNOWY, and SNAKEY modes
+// They all involve launching a single light or string of lights to traverse the array vertically or horizontally
+
+
+// RAINY: returns a random future time between 80 and 2000 ms from now, quadratically weighted towards 100
+// SNOWY: time is between 300 and 450 ms from now
+// SNAKEY: TBD
+unsigned long getNextLaunchTime(unsigned long now) {
+  if (automode == RAINY)
+      return now + 80 + sq(rand() % 45);
+    else if (automode == SNOWY)
+      return now + 300 + (rand() % 150);
+}
+
+void startTravelerMode() {
+  for (int i = 0; i < TRAVELERBUFSIZE; i++)
+    travelers[i].lane = -1; // mark all entries as invalid
+  nextlaunchtime = getNextLaunchTime(millis());
+}
+
+void resetTravelerMode() {
+  memset(status, 0, sizeof(status));
+  memset(nextlaunchtime, 0, sizeof(nextlaunchtime));
+  memset(nexttravelerid, 0, sizeof(nexttravelerid));
+  memset(travelers, 0, sizeof(travelers));
+  allOff();
+}
+
+// ##############################
+// RAINY AND SNOWY MODE FUNCTIONS
+// ##############################
 
 // on random time intervals, trigger "droplets" to fall down a column.
-// droplets have a random length (1-3) and speed
-// droplets schedule themselves one jump at a time, so on each illumination, it schedules the next one. Check if there is a pending schedule there, and only replace it if the new one is earlier
-// On each delumination, schedule the next one. Check if there is a pending delumination scheduled there, and only overwrite if the new one is later
-
-// returns a random future time between 100 and 2600 ms from now, quadratically weighted towards 100
-unsigned long getNextDropTime(unsigned long now) {
-  return now + 100 + sq(rand() % 50);
-}
+// Rain droplets have a random length (1-3) and speed. Snow will have length 1 and slower speed, but more drops launched per second
+// droplets advance themselves one row at a time. Each illumination proceeds unilaterally. Delumination proceeds if no other drop is holding onto the spot to be deluminated
 
 // returns true if any drop is currently lighting up the led at col, row
 bool anyDropsActive(int8_t col, int row) {
-  for (int i = 0; i < DROPBUFFERSIZE; i++) {
-    if (col == raindrops[i].col && row <= raindrops[i].depth && row > raindrops[i].depth - raindrops[i].length) // invalid (-1 col) entries will not match col
+  for (int i = 0; i < TRAVELERBUFSIZE; i++) {
+    if (col == travelers[i].lane && row <= travelers[i].progress && row > travelers[i].progress - travelers[i].length) // invalid (-1 lane) entries will not match col
       return true;
   }
   return false;
 }
 
-void advanceDrop(struct raindrop * drop) {
-  drop->depth++;
-  if (drop->depth <= 4)
-    status[drop->col * 5 + drop->depth] = 1; // illuminate(drop->col * 5 + drop->depth); // advance front of drop, but not farther than bottom
-  int taildepth = drop->depth - drop->length; // position of tail of drop that may be deluminated
-  if (taildepth >= 0 && taildepth <= 4 && !anyDropsActive(drop->col, taildepth)) // tail is on board and no other drops holding on to taildepth position
-    status[drop->col * 5 + taildepth] = 0; // deluminate(drop->col * 5 + taildepth, false); // release tail of drop
-  sendData(buildMessage(drop->col));  // illuminate front and deluminate tail in one message
+// advances a rain or snow drop one step down a column
+void advanceDrop(struct traveler * drop) {
+  drop->progress++;
+  if (drop->progress <= 4)
+    status[drop->lane * 5 + drop->progress] = 1; // advance front of drop, but not farther than bottom
+  int taildepth = drop->progress - drop->length; // position of tail of drop that may be deluminated
+  if (taildepth >= 0 && taildepth <= 4 && !anyDropsActive(drop->lane, taildepth)) // tail is on board and no other drops holding on to taildepth position
+    status[drop->lane * 5 + taildepth] = 0; // release tail of drop
+  sendData(buildMessage(drop->lane));  // illuminate front and deluminate tail in one message
   drop->nextupdate += drop->speed; // schedule next update
   if (taildepth >= 4) // tail just dropped off board
-    drop->col = -1; // mark buffer entry as invalid
+    drop->lane = -1; // mark buffer entry as invalid
 }
 
-void launchDrop(unsigned long now, struct raindrop * drop) {
-  drop->col = rand() % 6;
-  drop->speed = 120 + (rand() % 90);  // 120 to 210 ms per descent step
-  drop->length = (rand() % 100) < 10 ? 3 : 1 + (rand() % 2); // 10% length 3, 45% length 1, 45% length 2
-  drop->depth = 0;
+// launches a rain or snow drop from the top of a random column
+void launchDrop(unsigned long now, struct traveler * drop) {
+  drop->lane = rand() % 6; // column
+  drop->speed = (automode == RAINY ? 100 + (rand() % 130) : 400 + (rand() % 150));  // RAINY: 100 to 230 ms per descent step; SNOWY: 400 to 550 ms per step
+  drop->length = (automode == RAINY ? ((rand() % 100) < 10 ? 3 : 1 + (rand() % 2)) : 1); // RAINY: 10% length 3, 45% length 1, 45% length 2; SNOWY: 1
+  drop->progress = 0;
   drop->nextupdate = now + drop->speed;
-  illuminate(drop->col * 5); // illuminate top of column
+  illuminate(drop->lane * 5); // illuminate top of column
 }
 
-void processRainyTimeDelays(unsigned long now) {
+// check in with rain or snow drops to advance them or launch a new one
+void processDropTimeDelays(unsigned long now) {
   // occasionally launch another drop
-  if (now >= nextdroptime) {
-    launchDrop(now, &raindrops[nextdropid]);
-    nextdroptime = getNextDropTime(now);
-    nextdropid = (nextdropid + 1) % DROPBUFFERSIZE;
+  if (now >= nextlaunchtime) {
+    launchDrop(now, &travelers[nexttravelerid]);
+    nextlaunchtime = getNextLaunchTime(now);
+    nexttravelerid = (nexttravelerid + 1) % TRAVELERBUFSIZE;
   }
-  // check raindrop structs to advance drops
-  for (int i = 0; i < DROPBUFFERSIZE; i++)
-    if (raindrops[i].col != -1 && raindrops[i].nextupdate <= now)
-      advanceDrop(&raindrops[i]);
+  // check traveler structs to advance drops
+  for (int i = 0; i < TRAVELERBUFSIZE; i++)
+    if (travelers[i].lane != -1 && travelers[i].nextupdate <= now)
+      advanceDrop(&travelers[i]);
 }
 
-void startRainy() {
-  for (int i = 0; i < DROPBUFFERSIZE; i++)
-    raindrops[i].col = -1; // mark all entries as invalid
-  nextdroptime = getNextDropTime(millis());
-}
-
-void resetRainyMode() {
-  memset(status, 0, sizeof(status));
-  memset(nextdroptime, 0, sizeof(nextdroptime));
-  memset(nextdropid, 0, sizeof(nextdropid));
-  memset(raindrops, 0, sizeof(raindrops));
-  allOff();
-}
 
 // #####################
 // ALL ON MODE FUNCTIONS
@@ -520,27 +536,28 @@ void changemodeup() {
     if (pianomode == STARRY) {
       resetStarryMode();
       pianomode = COLUMNS;
-      Serial.println("changing pianomode to COLUMNS");
     } else if (pianomode == COLUMNS) {
       resetColMode();
       pianomode = STARRY;
-      Serial.println("changing pianomode to STARRY");
     }
   } else if (globalmode == AUTO) {
     if (automode == ALLON) {
       resetAllOnMode();
       automode = RAINY;
-      startRainy();
-      Serial.println("changing automode to RAINY");
+      startTravelerMode();
     } else if (automode == RAINY) {
-      resetRainyMode();
+      resetTravelerMode();
+      automode = SNOWY;
+      startTravelerMode();
+    } else if (automode == SNOWY) {
+      resetTravelerMode();
       automode = ALLON;
       startAllOn();
-      Serial.println("changing automode to ALLON");
     }
   }
 }
 
+// !! change me for 3-mode automode now
 // cycle the other direction
 void changemodedown() {
   changemodeup();
@@ -557,8 +574,8 @@ void switchUp() {
     globalmode = AUTO;
     if (automode == ALLON) {
       startAllOn();
-    } else if (automode == RAINY) {
-      startRainy();
+    } else if (automode == RAINY || automode == SNOWY) {
+      startTravelerMode();
     }
   } else {
     Serial.println("Switch going up but already in auto mode. Should not get here");
@@ -568,8 +585,8 @@ void switchUp() {
 // toggling switch from up to down (into piano mode)
 void switchDown() {
   if (globalmode == AUTO) {
-    if (automode == RAINY) {
-      resetRainyMode();
+    if (automode == RAINY || automode == SNOWY) {
+      resetTravelerMode();
     } else if (automode == ALLON) {
       resetAllOnMode();
     }
@@ -610,8 +627,8 @@ void processTimeDelays() {
     else if (pianomode == COLUMNS) 
       processColTimeDelays(now);
   } else if (globalmode == AUTO) {
-    if (automode == RAINY)
-      processRainyTimeDelays(now);
+    if (automode == RAINY || automode == SNOWY)
+      processDropTimeDelays(now);
   }
 }
 
