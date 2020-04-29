@@ -68,6 +68,7 @@ struct traveler {
   int speed;
   int8_t length;
   int8_t progress;
+  bool direction; // 0 means left (or up), 1 means right (or down)
   unsigned long nextupdate;
 };
 struct traveler travelers[TRAVELERBUFSIZE]; // keeps track of parameters and status of each active traveler
@@ -382,12 +383,6 @@ unsigned long getNextLaunchTime(unsigned long now) {
       return now + 300 + (rand() % 150);
 }
 
-void startTravelerMode() {
-  for (int i = 0; i < TRAVELERBUFSIZE; i++)
-    travelers[i].lane = -1; // mark all entries as invalid
-  nextlaunchtime = getNextLaunchTime(millis());
-}
-
 void resetTravelerMode() {
   memset(status, 0, sizeof(status));
   memset(nextlaunchtime, 0, sizeof(nextlaunchtime));
@@ -403,6 +398,12 @@ void resetTravelerMode() {
 // on random time intervals, trigger "droplets" to fall down a column.
 // Rain droplets have a random length (1-3) and speed. Snow will have length 1 and slower speed, but more drops launched per second
 // droplets advance themselves one row at a time. Each illumination proceeds unilaterally. Delumination proceeds if no other drop is holding onto the spot to be deluminated
+
+void startDropMode() {
+  for (int i = 0; i < TRAVELERBUFSIZE; i++)
+    travelers[i].lane = -1; // mark all entries as invalid
+  nextlaunchtime = getNextLaunchTime(millis());
+}
 
 // returns true if any drop is currently lighting up the led at col, row
 bool anyDropsActive(int8_t col, int row) {
@@ -451,6 +452,64 @@ void processDropTimeDelays(unsigned long now) {
       advanceDrop(&travelers[i]);
 }
 
+// #####################
+// SNAKEY MODE FUNCTIONS
+// #####################
+
+// On slightly randomized intervals for each row, launch a horizontal "snake" of random length and speed to travel in either direction
+// Only 5 traveler structs are used, one for each lane, and only one traveler runs through a lane at a time
+
+// within each lane, downtime between snakes
+unsigned long getIdleTime(unsigned long now) {
+  return now + 500 + (rand() % 2500);  // between 1/2 second and 3 seconds
+}
+
+// advances snake one step along lane. Resets and reschedules traveler struct when lane is clear
+void advanceSnake(struct traveler * snake) {
+  snake->progress++;
+  if (snake->progress <= 5)
+    illuminate((snake->direction ? snake->progress : 5 - snake->progress) * 5 + snake->lane); // advance front of snake in whichever direction
+  int tailprog = snake->progress - snake->length; // position of tail of snake to be deluminated
+  if (tailprog >= 0 && tailprog <= 5) // tail is on board
+    deluminate((snake->direction ? tailprog : 5 - tailprog) * 5 + snake->lane) = 0; // release tail of snake
+  if (tailprog >= 5) { // tail just dropped off board
+    snake->speed = -1; // mark lane as idle
+    snake->nextupdate = getIdleTime(snake->nextupdate); // schedule next snake launch in this lane
+  } else {
+    snake->nextupdate += snake->speed; // schedule next advancement
+  }
+}
+
+// launches a rain or snow drop from the top of a random column
+void launchSnake(unsigned long now, struct traveler * snake) {
+  snake->direction = rand() % 2; // 0 means right-to-left, 1 means left-to-right
+  snake->speed = 200 + (rand() % 130); // 200 to 330 ms per horizontal step 
+  snake->length = 3 + (rand() % 4); // 3-6 segments in length
+  snake->progress = 0;
+  snake->nextupdate = now + snake->speed;
+  illuminate(snake->lane + (snake->direction ? 0 : 25)); // illuminate beginning of snake (right or left edge of board)
+}
+
+void startSnakeyMode() {
+  unsigned long now = millis();
+  for (int i = 0; i < 5, i++) {
+    travelers[i].lane = i;
+    travelers[i].speed = -1; // indicator that lane is currently idle
+    travelers[i].nextupdate = now + (rand() % 7000); // stagger the start times widely
+  }
+}
+
+// checks in with traveler structs to advance snakes and launch new ones
+void processSnakeTimeDelays(unsigned long now) {
+  for (int i = 0; i < 5; i ++) {
+    if (travelers[i].nextupdate <= now) {
+      if (travelers[i].speed == -1)
+        launchSnake(now, &travelers[i])
+      else 
+        advanceSnake(&travelers[i]);
+    }
+  }
+}
 
 // #####################
 // ALL ON MODE FUNCTIONS
@@ -544,11 +603,11 @@ void changemodeup() {
     if (automode == ALLON) {
       resetAllOnMode();
       automode = RAINY;
-      startTravelerMode();
+      startDropMode();
     } else if (automode == RAINY) {
       resetTravelerMode();
       automode = SNOWY;
-      startTravelerMode();
+      startDropMode();
     } else if (automode == SNOWY) {
       resetTravelerMode();
       automode = ALLON;
@@ -575,7 +634,7 @@ void switchUp() {
     if (automode == ALLON) {
       startAllOn();
     } else if (automode == RAINY || automode == SNOWY) {
-      startTravelerMode();
+      startDropMode();
     }
   } else {
     Serial.println("Switch going up but already in auto mode. Should not get here");
