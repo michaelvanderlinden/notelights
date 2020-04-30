@@ -31,7 +31,7 @@ enum globalmodes{PIANO, AUTO};         // global switch modes
 enum globalmodes globalmode;           // global switch mode variable
 enum pianomodes{STARRY, COLUMNS};      // global pianomodes
 enum pianomodes pianomode;             // global pianomode variable
-enum automodes{RAINY, SNOWY, ALLON};   // global automodes
+enum automodes{RAINY, SNOWY, SNAKEY, ALLON};   // global automodes
 enum automodes automode;               // global automode variable
 uint8_t switchState = 0;       // on or off
 uint8_t blueState = 0;          
@@ -372,17 +372,6 @@ void processColTimeDelays(unsigned long now) {
 // These functions apply to RAINY, SNOWY, and SNAKEY modes
 // They all involve launching a single light or string of lights to traverse the array vertically or horizontally
 
-
-// RAINY: returns a random future time between 80 and 2000 ms from now, quadratically weighted towards 100
-// SNOWY: time is between 300 and 450 ms from now
-// SNAKEY: TBD
-unsigned long getNextLaunchTime(unsigned long now) {
-  if (automode == RAINY)
-      return now + 80 + sq(rand() % 45);
-    else if (automode == SNOWY)
-      return now + 300 + (rand() % 150);
-}
-
 void resetTravelerMode() {
   memset(status, 0, sizeof(status));
   memset(nextlaunchtime, 0, sizeof(nextlaunchtime));
@@ -403,6 +392,15 @@ void startDropMode() {
   for (int i = 0; i < TRAVELERBUFSIZE; i++)
     travelers[i].lane = -1; // mark all entries as invalid
   nextlaunchtime = getNextLaunchTime(millis());
+}
+
+// RAINY: returns a random future time between 80 and 2000 ms from now, quadratically weighted towards 100
+// SNOWY: time is between 300 and 450 ms from now
+unsigned long getNextLaunchTime(unsigned long now) {
+  if (automode == RAINY)
+      return now + 80 + sq(rand() % 45);
+    else if (automode == SNOWY)
+      return now + 300 + (rand() % 150);
 }
 
 // returns true if any drop is currently lighting up the led at col, row
@@ -610,8 +608,12 @@ void changemodeup() {
       startDropMode();
     } else if (automode == SNOWY) {
       resetTravelerMode();
+      automode = SNAKEY;
+      startSnakeyMode();
+    } else if (automode == SNAKEY) {
+      resetTravelerMode();
       automode = ALLON;
-      startAllOn();
+      startAllOn;
     }
   }
 }
@@ -635,6 +637,8 @@ void switchUp() {
       startAllOn();
     } else if (automode == RAINY || automode == SNOWY) {
       startDropMode();
+    } else if (automode == SNAKEY) {
+      startSnakeyMode();
     }
   } else {
     Serial.println("Switch going up but already in auto mode. Should not get here");
@@ -644,7 +648,7 @@ void switchUp() {
 // toggling switch from up to down (into piano mode)
 void switchDown() {
   if (globalmode == AUTO) {
-    if (automode == RAINY || automode == SNOWY) {
+    if (automode == RAINY || automode == SNOWY || automode == SNAKEY) {
       resetTravelerMode();
     } else if (automode == ALLON) {
       resetAllOnMode();
@@ -688,6 +692,8 @@ void processTimeDelays() {
   } else if (globalmode == AUTO) {
     if (automode == RAINY || automode == SNOWY)
       processDropTimeDelays(now);
+    else if (globalmode == SNAKEY)
+      processSnakeTimeDelays(now);
   }
 }
 
