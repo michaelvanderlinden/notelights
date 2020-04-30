@@ -618,10 +618,29 @@ void changemodeup() {
   }
 }
 
-// !! change me for 3-mode automode now
 // cycle the other direction
 void changemodedown() {
-  changemodeup();
+  if (globalmode == PIANO) {
+    changemodeup(); // only two piano modes currently
+  } else if (globalmode == AUTO) {
+    if (automode == ALLON) {
+      resetAllOnMode();
+      automode = SNAKEY;
+      startSnakeyMode();
+    } else if (automode == RAINY) {
+      resetTravelerMode();
+      automode = ALLON;
+      startAllOn();
+    } else if (automode == SNOWY) {
+      resetTravelerMode();
+      automode = RAINY;
+      startDropMode();
+    } else if (automode == SNAKEY) {
+      resetTravelerMode();
+      automode = SNOWY;
+      startDropMode();
+    }
+  }
 }
 
 // toggling switch from down to up (into auto mode)
