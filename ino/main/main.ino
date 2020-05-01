@@ -469,7 +469,7 @@ void advanceSnake(struct traveler * snake) {
     illuminate((snake->direction ? snake->progress : 5 - snake->progress) * 5 + snake->lane); // advance front of snake in whichever direction
   int tailprog = snake->progress - snake->length; // position of tail of snake to be deluminated
   if (tailprog >= 0 && tailprog <= 5) // tail is on board
-    deluminate((snake->direction ? tailprog : 5 - tailprog) * 5 + snake->lane) = 0; // release tail of snake
+    deluminate((snake->direction ? tailprog : 5 - tailprog) * 5 + snake->lane, false); // release tail of snake
   if (tailprog >= 5) { // tail just dropped off board
     snake->speed = -1; // mark lane as idle
     snake->nextupdate = getIdleTime(snake->nextupdate); // schedule next snake launch in this lane
@@ -482,7 +482,7 @@ void advanceSnake(struct traveler * snake) {
 void launchSnake(unsigned long now, struct traveler * snake) {
   snake->direction = rand() % 2; // 0 means right-to-left, 1 means left-to-right
   snake->speed = 200 + (rand() % 130); // 200 to 330 ms per horizontal step 
-  snake->length = 3 + (rand() % 4); // 3-6 segments in length
+  snake->length = 2 + (rand() % 4); // 2-5 segments in length
   snake->progress = 0;
   snake->nextupdate = now + snake->speed;
   illuminate(snake->lane + (snake->direction ? 0 : 25)); // illuminate beginning of snake (right or left edge of board)
@@ -490,10 +490,10 @@ void launchSnake(unsigned long now, struct traveler * snake) {
 
 void startSnakeyMode() {
   unsigned long now = millis();
-  for (int i = 0; i < 5, i++) {
+  for (int i = 0; i < 5; i++) {
     travelers[i].lane = i;
     travelers[i].speed = -1; // indicator that lane is currently idle
-    travelers[i].nextupdate = now + (rand() % 7000); // stagger the start times widely
+    travelers[i].nextupdate = now + (rand() % 3000); // stagger the start times
   }
 }
 
@@ -502,7 +502,7 @@ void processSnakeTimeDelays(unsigned long now) {
   for (int i = 0; i < 5; i ++) {
     if (travelers[i].nextupdate <= now) {
       if (travelers[i].speed == -1)
-        launchSnake(now, &travelers[i])
+        launchSnake(now, &travelers[i]);
       else 
         advanceSnake(&travelers[i]);
     }
@@ -613,7 +613,7 @@ void changemodeup() {
     } else if (automode == SNAKEY) {
       resetTravelerMode();
       automode = ALLON;
-      startAllOn;
+      startAllOn();
     }
   }
 }
@@ -666,12 +666,14 @@ void switchUp() {
 
 // toggling switch from up to down (into piano mode)
 void switchDown() {
+  Serial.println("switch down called");
   if (globalmode == AUTO) {
     if (automode == RAINY || automode == SNOWY || automode == SNAKEY) {
       resetTravelerMode();
     } else if (automode == ALLON) {
       resetAllOnMode();
     }
+    Serial.println("switch down got here");
     globalmode = PIANO;
     // !! I don't think I need to init any piano-mode specific stuff, but if I did, this is where I would do it.
   } else {
@@ -711,7 +713,7 @@ void processTimeDelays() {
   } else if (globalmode == AUTO) {
     if (automode == RAINY || automode == SNOWY)
       processDropTimeDelays(now);
-    else if (globalmode == SNAKEY)
+    else if (automode == SNAKEY)
       processSnakeTimeDelays(now);
   }
 }
@@ -746,12 +748,14 @@ void pollWhiteButton() {
   lastWhiteState = reading;
 }
 
+ // !! This does not register when the switch starts in the down position. Currently not an issue because piano modes don't require startup and I think globalmode defaults to piano, but it will cause issues down the line.
 void pollSwitch() {
+  unsigned long now = millis();
   int reading = digitalRead(SWITCHPIN);
   if (reading != lastSwitchState) {
-    lastSwitchDebounceTime = millis();
+    lastSwitchDebounceTime = now;
   }
-  if ((millis() - lastSwitchDebounceTime) > DEBOUNCEDELAY) {
+  if ((now - lastSwitchDebounceTime) > DEBOUNCEDELAY) {
     if (reading != switchState) {
       switchState = reading;
       if (switchState == 1)
@@ -808,7 +812,7 @@ void setup() {
   pollSwitch();
   randomSeed(analogRead(4));
   pianomode = STARRY;
-  automode = RAINY;
+  automode = SNAKEY;
   delay(50);
 }
 
