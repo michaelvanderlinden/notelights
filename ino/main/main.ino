@@ -75,6 +75,12 @@ struct traveler travelers[TRAVELERBUFSIZE]; // keeps track of parameters and sta
 uint8_t nexttravelerid = 0; // index through travelers
 
 
+int freeRam () {
+  extern int __heap_start, *__brkval;
+  int v;
+  return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
+}
+
 
 // #################
 // MAX7219 FUNCTIONS
@@ -92,11 +98,13 @@ int buildMessage(int digit) {
 
 // shifts a 16-bit message into the MAX7219 input register, then latches it.
 void sendData(int data) {
+  // Serial.print("sending...");
   digitalWrite(CLOCKPIN, LOW);
   digitalWrite(LATCHPIN, LOW);
   shiftOut(DATAPIN, CLOCKPIN, MSBFIRST, data >> 8);
   shiftOut(DATAPIN, CLOCKPIN, MSBFIRST, data);
   digitalWrite(LATCHPIN, HIGH);
+  // Serial.println("sent.");
 }
 
 // turns all leds off
@@ -415,11 +423,13 @@ bool anyDropsActive(int8_t col, int row) {
 // advances a rain or snow drop one step down a column
 void advanceDrop(struct traveler * drop) {
   drop->progress++;
-  if (drop->progress <= 4)
+  if (drop->progress <= 4) {
     status[drop->lane * 5 + drop->progress] = 1; // advance front of drop, but not farther than bottom
+  }
   int taildepth = drop->progress - drop->length; // position of tail of drop that may be deluminated
   if (taildepth >= 0 && taildepth <= 4 && !anyDropsActive(drop->lane, taildepth)) // tail is on board and no other drops holding on to taildepth position
     status[drop->lane * 5 + taildepth] = 0; // release tail of drop
+  // Serial.print("sending data for lane "); Serial.println(drop->lane);
   sendData(buildMessage(drop->lane));  // illuminate front and deluminate tail in one message
   drop->nextupdate += drop->speed; // schedule next update
   if (taildepth >= 4) // tail just dropped off board
@@ -445,7 +455,7 @@ void processDropTimeDelays(unsigned long now) {
     nexttravelerid = (nexttravelerid + 1) % TRAVELERBUFSIZE;
   }
   // check traveler structs to advance drops
-  for (int i = 0; i < TRAVELERBUFSIZE; i++)
+  for (uint8_t i = 0; i < TRAVELERBUFSIZE; i++)
     if (travelers[i].lane != -1 && travelers[i].nextupdate <= now)
       advanceDrop(&travelers[i]);
 }
@@ -666,14 +676,12 @@ void switchUp() {
 
 // toggling switch from up to down (into piano mode)
 void switchDown() {
-  Serial.println("switch down called");
   if (globalmode == AUTO) {
     if (automode == RAINY || automode == SNOWY || automode == SNAKEY) {
       resetTravelerMode();
     } else if (automode == ALLON) {
       resetAllOnMode();
     }
-    Serial.println("switch down got here");
     globalmode = PIANO;
     // !! I don't think I need to init any piano-mode specific stuff, but if I did, this is where I would do it.
   } else {
@@ -812,8 +820,9 @@ void setup() {
   pollSwitch();
   randomSeed(analogRead(4));
   pianomode = STARRY;
-  automode = SNAKEY;
+  automode = RAINY;
   delay(50);
+  Serial.println(freeRam());
 }
 
 // ARDUINO LOOP
@@ -822,6 +831,8 @@ void loop() {
   processMidi();
   processTimeDelays();
   delay(2); // !! rather than delay, maybe just use millis to poll the midi source every 2 or 3 ms.
+  if (millis() % 2500 == 0 || millis() % 2500 == 1)
+    Serial.println(freeRam());
 }
 
 
