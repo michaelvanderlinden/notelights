@@ -61,13 +61,15 @@ uint8_t maxedout[3] = {0};          // flag for when each third of assigned arra
 uint8_t colstatus[6] = {0};           // keeps track of status for each column. 0 means released (totally off or decaying in FALL pattern), 1 means on under key press or press + sustain, 2 means on under sustain alone (1 and 2 are decaying in SUSTAIN pattern)
 enum coldecaystyles{SUSTAIN, FALL};   // column decay styles for COLUMNS mode
 
-// Traveler structs for Rainy, Snowy, Snakey modes
+// Traveler structs for Rainy, Snowy, Snakey, Meteor modes
 unsigned long nextlaunchtime = 0;       // time to launch the next traveler
 struct traveler { 
   int8_t lane;
   int speed;
   int8_t length;
   int8_t progress; // progress of leading edge of traveler
+  uint8_t row; // leading edge, for meteors only
+  uint8_t col; // leading edge, for meteors only
   bool direction; // for snakes, 0 means left (or up), 1 means right (or down). For meteors, 0 means shallow angle, 1 means steep angle
   unsigned long nextupdate;
 };
@@ -99,13 +101,11 @@ int buildMessage(int digit) {
 
 // shifts a 16-bit message into the MAX7219 input register, then latches it.
 void sendData(int data) {
-  // Serial.print("sending...");
   digitalWrite(CLOCKPIN, LOW);
   digitalWrite(LATCHPIN, LOW);
   shiftOut(DATAPIN, CLOCKPIN, MSBFIRST, data >> 8);
   shiftOut(DATAPIN, CLOCKPIN, MSBFIRST, data);
   digitalWrite(LATCHPIN, HIGH);
-  // Serial.println("sent.");
 }
 
 // turns all leds off
@@ -561,6 +561,8 @@ void launchMeteor(unsigned long now, struct traveler * meteor) {
   meteor->speed = 50 + (rand() % 50); // 50-100 ms per step
   meteor->length = (meteor->direction ? 2 : 2 + (rand() % 2)); // steep meteors are length 2, shallow meteors are length 2 or 3
   meteor->progress = 0;
+  meteor->row = meteor->lane < 5 ? 0 : meteor->lane - 4;
+  meteor->col = meteor->lane > 3 ? 5 : meteor->lane + 1;
   meteor->nextupdate = now + meteor->speed;
   illuminate(meteor->lane < 5 ? (meteor->lane + 1) * 5 : meteor->lane + 21); // illuminate starting position
   nextlaunchtime = getNextLaunchTime(now);
@@ -569,18 +571,17 @@ void launchMeteor(unsigned long now, struct traveler * meteor) {
 // advances meteor one step along lane. Resets traveler struct when meteor advances off the board
 void advanceMeteor(struct traveler * meteor) {
   meteor->progress++;
-  ---change all this from snake logic ---
-  if (meteor->progress <= 5)
-    illuminate((meteor->direction ? meteor->progress : 5 - meteor->progress) * 5 + meteor->lane); // advance front of meteor in whichever direction
-  int tailprog = meteor->progress - meteor->length; // position of tail of meteor to be deluminated
-  if (tailprog >= 0 && tailprog <= 5) // tail is on board
-    deluminate((meteor->direction ? tailprog : 5 - tailprog) * 5 + meteor->lane, false); // release tail of meteor
-  if (tailprog >= 5) { // tail just dropped off board
-    meteor->speed = -1; // mark lane as idle
-    meteor->nextupdate = getIdleTime(meteor->nextupdate); // schedule next meteor launch in this lane
-  } else {
-    meteor->nextupdate += meteor->speed; // schedule next advancement
-  }
+  meteor->col--; // decrement col
+  meteor->row += ((!(meteor->col % 2)) + meteor->direction);  // increment row. shallows drop by 0 or 1, steeps drop by 1 or 2, depending on parity of col
+  if (meteor->row < 5 && meteor->col >= 0) // if leading edge still on board, illuminate
+    illuminate(meteor->col * 5 + meteor->row);
+  uint8_t tailcol = meteor->col + meteor->length; // get tail position
+  uint8_t tailrow = meteor->row - 1 - (meteor->length == 2 ? meteor->direction * 2 : meteor->col % 2);
+  deluminate(tailcol * 5 + tailrow, false); // deluminate tail
+  if (tailrow >= 4 || tailcol <= 0) // if tail just dropped off board, reset meteor
+    meteor->lane = -1;
+  else // else, schedule next advancement
+    meteor->nextupdate += meteor->speed;
 }
 
 
@@ -687,6 +688,10 @@ void changemodeup() {
       startSnakeyMode();
     } else if (automode == SNAKEY) {
       resetTravelerMode();
+      automode = METEOR;
+      startMeteorMode();
+    } else if (automode == METEOR) {
+      resetTravelerMode();
       automode = ALLON;
       startAllOn();
     }
@@ -700,8 +705,8 @@ void changemodedown() {
   } else if (globalmode == AUTO) {
     if (automode == ALLON) {
       resetAllOnMode();
-      automode = SNAKEY;
-      startSnakeyMode();
+      automode = METEOR;
+      startMeteorMode();
     } else if (automode == RAINY) {
       resetTravelerMode();
       automode = ALLON;
@@ -714,6 +719,10 @@ void changemodedown() {
       resetTravelerMode();
       automode = SNOWY;
       startDropMode();
+    } else if (automode == METEOR) {
+      resetTravelerMode();
+      automode = SNAKEY;
+      startSnakeyMode();
     }
   }
 }
@@ -733,6 +742,8 @@ void switchUp() {
       startDropMode();
     } else if (automode == SNAKEY) {
       startSnakeyMode();
+    } else if (automode == METEOR) {
+      startMeteorMode();
     }
   } else {
     Serial.println("Switch going up but already in auto mode. Should not get here");
@@ -742,7 +753,7 @@ void switchUp() {
 // toggling switch from up to down (into piano mode)
 void switchDown() {
   if (globalmode == AUTO) {
-    if (automode == RAINY || automode == SNOWY || automode == SNAKEY) {
+    if (automode == RAINY || automode == SNOWY || automode == SNAKEY || automode == METEOR) {
       resetTravelerMode();
     } else if (automode == ALLON) {
       resetAllOnMode();
@@ -788,6 +799,8 @@ void processTimeDelays() {
       processDropTimeDelays(now);
     else if (automode == SNAKEY)
       processSnakeTimeDelays(now);
+    else if (automode == METEOR)
+      processMeteorTimeDelays(now);
   }
 }
 
@@ -821,7 +834,8 @@ void pollWhiteButton() {
   lastWhiteState = reading;
 }
 
- // !! This does not register when the switch starts in the down position. Currently not an issue because piano modes don't require startup and I think globalmode defaults to piano, but it will cause issues down the line.
+ // !! This does not register when the switch starts in the down position. Currently not an issue because piano modes don't require startup and I think globalmode defaults to piano (just by being first (0) in the enum list), but it will cause issues down the line.
+// 7/3/20 ^^ I don't know if this is still the case or if it registers because of being called at startup
 void pollSwitch() {
   unsigned long now = millis();
   int reading = digitalRead(SWITCHPIN);
@@ -885,7 +899,7 @@ void setup() {
   pollSwitch();
   randomSeed(analogRead(4));
   pianomode = STARRY;
-  automode = RAINY;
+  automode = METEOR;
   delay(50);
   // Serial.println(freeRam());
 }
@@ -902,9 +916,6 @@ void loop() {
 
 
 // could adjust by range: high (melody) notes get solo treatment, while bass notes are bundled to avoid clutter
-
-
-// !! if compiled size starts to become a problem, one small tip is to use uint8_t or int8_t instead of int where possible
 
 // todo:
 // tune columns intensities (especially soft ones) to match actual intensity. Softest threshold is too soft
