@@ -31,7 +31,7 @@ enum globalmodes{PIANO, AUTO};         // global switch modes
 enum globalmodes globalmode;           // global switch mode variable
 enum pianomodes{STARRY, COLUMNS};      // global pianomodes
 enum pianomodes pianomode;             // global pianomode variable
-enum automodes{RAINY, SNOWY, SNAKEY, ALLON};   // global automodes
+enum automodes{RAINY, SNOWY, SNAKEY, METEOR, ALLON};   // global automodes
 enum automodes automode;               // global automode variable
 uint8_t switchState = 0;       // on or off
 uint8_t blueState = 0;          
@@ -67,14 +67,15 @@ struct traveler {
   int8_t lane;
   int speed;
   int8_t length;
-  int8_t progress;
-  bool direction; // 0 means left (or up), 1 means right (or down)
+  int8_t progress; // progress of leading edge of traveler
+  bool direction; // for snakes, 0 means left (or up), 1 means right (or down). For meteors, 0 means shallow angle, 1 means steep angle
   unsigned long nextupdate;
 };
 struct traveler travelers[TRAVELERBUFSIZE]; // keeps track of parameters and status of each active traveler
 uint8_t nexttravelerid = 0; // index through travelers
 
 
+// witchcraft that tells you how much RAM is free
 int freeRam () {
   extern int __heap_start, *__brkval;
   int v;
@@ -377,7 +378,7 @@ void processColTimeDelays(unsigned long now) {
 // TRAVELER MODE FUNCTIONS
 // #######################
 
-// These functions apply to RAINY, SNOWY, and SNAKEY modes
+// This function applies to RAINY, SNOWY, SNAKEY, and METEOR modes
 // They all involve launching a single light or string of lights to traverse the array vertically or horizontally
 
 void resetTravelerMode() {
@@ -386,6 +387,19 @@ void resetTravelerMode() {
   memset(nexttravelerid, 0, sizeof(nexttravelerid));
   memset(travelers, 0, sizeof(travelers));
   allOff();
+}
+
+// This  function applies to RAINY, SNOWY, and METEOR modes
+// RAINY: returns a random future time between 80 and 2000 ms from now, quadratically weighted towards 100
+// SNOWY: time is between 300 and 450 ms from now
+// METEOR: time is time is between 0.5s and 8s from now.
+unsigned long getNextLaunchTime(unsigned long now) {
+  if (automode == RAINY)
+    return now + 80 + sq(rand() % 45);
+  else if (automode == SNOWY)
+    return now + 300 + (rand() % 150);
+  else if (automode == METEOR)
+    return now + 500 + (rand() % 7500);
 }
 
 // ##############################
@@ -402,14 +416,6 @@ void startDropMode() {
   nextlaunchtime = getNextLaunchTime(millis());
 }
 
-// RAINY: returns a random future time between 80 and 2000 ms from now, quadratically weighted towards 100
-// SNOWY: time is between 300 and 450 ms from now
-unsigned long getNextLaunchTime(unsigned long now) {
-  if (automode == RAINY)
-      return now + 80 + sq(rand() % 45);
-    else if (automode == SNOWY)
-      return now + 300 + (rand() % 150);
-}
 
 // returns true if any drop is currently lighting up the led at col, row
 bool anyDropsActive(int8_t col, int row) {
@@ -518,6 +524,65 @@ void processSnakeTimeDelays(unsigned long now) {
     }
   }
 }
+
+
+// #####################
+// METEOR MODE FUNCTIONS
+// #####################
+
+// On sporadic intervals, launch a meteor that starts on the top or right edge of matrix and travels diagonally
+// down and to the left. Direction flag in traveler indicates travel angle 0 (shallow) or 1 (steep). 9 lanes are
+// available, starting from 0 (top second from left) to 4 (top-right corner) to 8 (bottom-right corner).
+
+void startMeteorMode() {
+  for (int i = 0; i < TRAVELERBUFSIZE; i++)
+    travelers[i].lane = -1; // mark all entries as invalid
+  nextlaunchtime = millis() + 300 + (rand() % 1000);
+}
+
+// checks in with meteor structs to advance meteors and launch new ones
+void processMeteorTimeDelays(unsigned long now) {
+  // occasionally launch another meteor
+  if (now >= nextlaunchtime) {
+    launchMeteor(now, &travelers[nexttravelerid]);
+    nextlaunchtime = getNextLaunchTime(now);
+    nexttravelerid = (nexttravelerid + 1) % TRAVELERBUFSIZE;
+  }
+  // check meteor structs to advance meteors
+  for (uint8_t i = 0; i < TRAVELERBUFSIZE; i++)
+    if (travelers[i].lane != -1 && travelers[i].nextupdate <= now)
+      advanceMeteor(&travelers[i]);
+}
+
+// launches a meteor from the edge of the matrix
+void launchMeteor(unsigned long now, struct traveler * meteor) {
+  meteor->direction = rand() % 2; // 0 is shallow angle, 1 is steep
+  meteor->lane = rand() % 9; // starting position: 0-4 are top row (not including top left), 4-8 are right edge
+  meteor->speed = 50 + (rand() % 50); // 50-100 ms per step
+  meteor->length = (meteor->direction ? 2 : 2 + (rand() % 2)); // steep meteors are length 2, shallow meteors are length 2 or 3
+  meteor->progress = 0;
+  meteor->nextupdate = now + meteor->speed;
+  illuminate(meteor->lane < 5 ? (meteor->lane + 1) * 5 : meteor->lane + 21); // illuminate starting position
+  nextlaunchtime = getNextLaunchTime(now);
+}
+
+// advances meteor one step along lane. Resets traveler struct when meteor advances off the board
+void advanceMeteor(struct traveler * meteor) {
+  meteor->progress++;
+  ---change all this from snake logic ---
+  if (meteor->progress <= 5)
+    illuminate((meteor->direction ? meteor->progress : 5 - meteor->progress) * 5 + meteor->lane); // advance front of meteor in whichever direction
+  int tailprog = meteor->progress - meteor->length; // position of tail of meteor to be deluminated
+  if (tailprog >= 0 && tailprog <= 5) // tail is on board
+    deluminate((meteor->direction ? tailprog : 5 - tailprog) * 5 + meteor->lane, false); // release tail of meteor
+  if (tailprog >= 5) { // tail just dropped off board
+    meteor->speed = -1; // mark lane as idle
+    meteor->nextupdate = getIdleTime(meteor->nextupdate); // schedule next meteor launch in this lane
+  } else {
+    meteor->nextupdate += meteor->speed; // schedule next advancement
+  }
+}
+
 
 // #####################
 // ALL ON MODE FUNCTIONS
@@ -822,7 +887,7 @@ void setup() {
   pianomode = STARRY;
   automode = RAINY;
   delay(50);
-  Serial.println(freeRam());
+  // Serial.println(freeRam());
 }
 
 // ARDUINO LOOP
@@ -831,8 +896,8 @@ void loop() {
   processMidi();
   processTimeDelays();
   delay(2); // !! rather than delay, maybe just use millis to poll the midi source every 2 or 3 ms.
-  if (millis() % 2500 == 0 || millis() % 2500 == 1)
-    Serial.println(freeRam());
+  // if (millis() % 2500 == 0 || millis() % 2500 == 1)
+  //   Serial.println(freeRam());
 }
 
 
