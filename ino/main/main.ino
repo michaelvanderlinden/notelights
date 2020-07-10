@@ -68,8 +68,8 @@ struct traveler {
   int speed;
   int8_t length;
   int8_t progress; // progress of leading edge of traveler
-  uint8_t row; // leading edge, for meteors only
-  uint8_t col; // leading edge, for meteors only
+  int8_t row; // leading edge, for meteors only
+  int8_t col; // leading edge, for meteors only
   bool direction; // for snakes, 0 means left (or up), 1 means right (or down). For meteors, 0 means shallow angle, 1 means steep angle
   unsigned long nextupdate;
 };
@@ -112,6 +112,7 @@ void sendData(int data) {
 void allOff() {
   for (int i = 0; i < 6; i++)
     sendData(OFFSIGNALS[i]);
+  delay(1); // Sometimes lights got left on when I changed modes and I'm superstitious that it was because of too-fast latching
 }
 
 // turns all leds on, then off using test mode
@@ -392,14 +393,14 @@ void resetTravelerMode() {
 // This  function applies to RAINY, SNOWY, and METEOR modes
 // RAINY: returns a random future time between 80 and 2000 ms from now, quadratically weighted towards 100
 // SNOWY: time is between 300 and 450 ms from now
-// METEOR: time is time is between 0.5s and 8s from now.
+// METEOR: time is time is between 0.5s and 7s from now.
 unsigned long getNextLaunchTime(unsigned long now) {
   if (automode == RAINY)
     return now + 80 + sq(rand() % 45);
   else if (automode == SNOWY)
     return now + 300 + (rand() % 150);
   else if (automode == METEOR)
-    return now + 500 + (rand() % 7500);
+    return now + 500 + (rand() % 6500);
 }
 
 // ##############################
@@ -558,27 +559,48 @@ void processMeteorTimeDelays(unsigned long now) {
 void launchMeteor(unsigned long now, struct traveler * meteor) {
   meteor->direction = rand() % 2; // 0 is shallow angle, 1 is steep
   meteor->lane = rand() % 9; // starting position: 0-4 are top row (not including top left), 4-8 are right edge
-  meteor->speed = 50 + (rand() % 50); // 50-100 ms per step
+  meteor->speed = (50 + (rand() % 100)); // 50-150 ms per step
   meteor->length = (meteor->direction ? 2 : 2 + (rand() % 2)); // steep meteors are length 2, shallow meteors are length 2 or 3
   meteor->progress = 0;
   meteor->row = meteor->lane < 5 ? 0 : meteor->lane - 4;
   meteor->col = meteor->lane > 3 ? 5 : meteor->lane + 1;
   meteor->nextupdate = now + meteor->speed;
   illuminate(meteor->lane < 5 ? (meteor->lane + 1) * 5 : meteor->lane + 21); // illuminate starting position
+  // Serial.println("LAUNCHING: row, col, pos: ");
+  // Serial.println(meteor->row);
+  // Serial.println(meteor->col);
+  // Serial.println(meteor->lane < 5 ? (meteor->lane + 1) * 5 : meteor->lane + 21);
+  // Serial.println(meteor->direction ? "STEEP" : "SHALLOW");
   nextlaunchtime = getNextLaunchTime(now);
 }
 
 // advances meteor one step along lane. Resets traveler struct when meteor advances off the board
 void advanceMeteor(struct traveler * meteor) {
   meteor->progress++;
-  meteor->col--; // decrement col
   meteor->row += ((!(meteor->col % 2)) + meteor->direction);  // increment row. shallows drop by 0 or 1, steeps drop by 1 or 2, depending on parity of col
-  if (meteor->row < 5 && meteor->col >= 0) // if leading edge still on board, illuminate
+  meteor->col--; // decrement col
+  if (meteor->row < 5 && meteor->col >= 0) {// if leading edge still on board, illuminate
     illuminate(meteor->col * 5 + meteor->row);
-  uint8_t tailcol = meteor->col + meteor->length; // get tail position
-  uint8_t tailrow = meteor->row - 1 - (meteor->length == 2 ? meteor->direction * 2 : meteor->col % 2);
-  deluminate(tailcol * 5 + tailrow, false); // deluminate tail
-  if (tailrow >= 4 || tailcol <= 0) // if tail just dropped off board, reset meteor
+    // Serial.println("ADVANCING to pos:");
+    // Serial.println(meteor->col * 5 + meteor->row);
+  }
+  int8_t tailcol = meteor->col + meteor->length; // get tail position
+  int8_t tailrow = meteor->row - (meteor->direction ? 3 : (meteor->length == 3 && (meteor->col % 2) ? 2 : 1));
+  // shallow, new front is even col, length 2		:   new front row - 1
+  // shallow, new front is odd col, length 2		:   new front row - 1
+  // shallow, new front is even col, length 3       :   new front row - 1
+  // shallow, new front is odd col, length 3		:   new front row - 2
+  // steep, new front is even col, length 2			:   new front row - 3
+  // steep, new front is odd col, length 2			:   new front row - 3
+  	//   Serial.println("CALCULATED POTENTIAL DELUMINATE row, col, pos:");
+	  // Serial.println(tailrow);
+	  // Serial.println(tailcol);
+  	//   Serial.println(tailcol * 5 + tailrow);
+  if (tailrow >= 0 && tailrow <= 4 && tailcol >= 0 && tailcol <= 5)
+	  deluminate(tailcol * 5 + tailrow, false); // deluminate tail
+	  // Serial.println("ACTUALLY DELUMINATING");
+  if ((tailrow >= 4 && (meteor->direction || !(tailcol % 2))) || tailcol <= 0) // if tail just dropped off board, reset meteor
+  	// dropped off when tail is at/past far left col, or on/below bottom row as long as either steep or even-column
     meteor->lane = -1;
   else // else, schedule next advancement
     meteor->nextupdate += meteor->speed;
@@ -899,7 +921,7 @@ void setup() {
   pollSwitch();
   randomSeed(analogRead(4));
   pianomode = STARRY;
-  automode = METEOR;
+  automode = RAINY;
   delay(50);
   // Serial.println(freeRam());
 }
